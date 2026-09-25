@@ -263,23 +263,111 @@ UPSTASH_REDIS_URL=rediss://default:...@...upstash.io:6379
 UPSTASH_REDIS_TOKEN=...
 ```
 
-### 3. Run Locally
+### 3. Run GitGuard Locally with ngrok
 
-Start the web application:
-```bash
-npm run dev
+#### 🌐 How ngrok Connects GitHub to Localhost
+
+When you develop a GitHub App locally, GitHub cannot directly send webhook HTTP POST requests to `http://localhost:3000` because your local machine sits behind a local network NAT router and firewall without a public IP.
+
+**ngrok creates a secure, bidirectional reverse tunnel** that exposes your local Next.js server to the public Internet:
+
+```
+[GitHub Platform]
+       │
+       │ (1) Webhook Event (push / pull_request / marketplace)
+       │     POST https://<subdomain>.ngrok-free.app/api/webhooks/github
+       ▼
+[ngrok Edge Cloud Infrastructure]
+       │
+       │ (2) Encrypted TLS Tunnel
+       ▼
+[ngrok Local Client (CLI)]
+       │
+       │ (3) Forwards HTTP traffic locally
+       ▼
+[Next.js 14 Web Server (localhost:3000)]
+       │
+       │ (4) Verifies X-Hub-Signature-256 HMAC
+       │ (5) Instant HTTP 200 ACK (<50ms)
+       │ (6) Enqueues Job in Redis
+       ▼
+[Upstash Redis (BullMQ Queue)]
+       │
+       │ (7) worker.ts polls and dequeues job
+       ▼
+[GitGuard Background Worker]
+       │
+       │ (8) Exchanges GitHub App JWT for Installation Token
+       │ (9) Clones / Fetches PR Diff & Files
+       │ (10) Runs LangGraph 7-Agent Security Ensemble
+       │ (11) Posts GitHub Check Runs & PR Annotations
+       ▼
+[GitHub PR / Check Runs Interface]
 ```
 
-In a separate terminal, start the BullMQ worker:
-```bash
-npm run worker
-```
+#### Step-by-Step Setup:
 
-Expose your local server via `ngrok` or `smee.io`:
-```bash
-ngrok http 3000
-```
-Update your GitHub App's Webhook URL to: `https://<your-ngrok-url>/api/webhooks/github`.
+1. **Configure ngrok Authtoken** (saved in `~/.config/ngrok/ngrok.yml` or `~/.library/Application Support/ngrok/ngrok.yml`):
+   ```bash
+   ngrok config add-authtoken <YOUR_NGROK_AUTHTOKEN>
+   ```
+   *(Your token is also safely tracked in `.env.local` as `NGROK_AUTHTOKEN`)*.
+
+2. **Open 3 Terminal Tabs**:
+
+   - **Terminal 1 — Next.js Application Server**:
+     ```bash
+     npm run dev
+     # Runs at http://localhost:3000
+     ```
+
+   - **Terminal 2 — BullMQ Security Worker**:
+     ```bash
+     npm run worker
+     # Connects to Upstash Redis and listens for GitHub jobs
+     ```
+
+   - **Terminal 3 — ngrok Public Tunnel**:
+     ```bash
+     ngrok http 3000
+     ```
+     *Or if using an ngrok static domain (recommended to prevent URL changes):*
+     ```bash
+     ngrok http 3000 --domain=your-domain.ngrok-free.app
+     ```
+
+3. **Configure your GitHub App Settings**:
+   - Navigate to [GitHub Developer Settings → GitHub Apps](https://github.com/settings/apps) → Select your App.
+   - **Webhook URL**: Enter your ngrok URL with the webhook path:
+     ```
+     https://<your-ngrok-subdomain>.ngrok-free.app/api/webhooks/github
+     ```
+   - **Webhook Secret**: Match the `GITHUB_WEBHOOK_SECRET` stored in your `.env.local`.
+   - **Permissions Required**:
+     - *Checks*: Read & write (to create Check Runs and display annotations)
+     - *Pull requests*: Read & write (to post comments and review feedback)
+     - *Repository contents*: Read-only (to read commit diffs and `.gitguardignore`)
+     - *Statuses*: Read & write
+   - **Subscribe to events**:
+     - `Check run` & `Check suite`
+     - `Pull request`
+     - `Push`
+     - `Installation` & `Installation repositories`
+     - `Marketplace purchase` (for plan tier synchronization)
+   - Save changes.
+
+4. **Verify the Connection**:
+   - In GitHub App settings, go to the **Advanced** tab → **Recent Deliveries**.
+   - Select a recent delivery and click **Redeliver** (or make a test commit to an installed repository).
+   - In **Terminal 1 (Next.js)**, you will immediately see:
+     ```
+     [webhook] Received event="pull_request" delivery="xxx" installation_id=12345
+     ```
+   - In **Terminal 2 (Worker)**, you will see the pipeline execute:
+     ```
+     [worker] Processing job pull_request:owner/repo
+     [orchestrator] Running LangGraph multi-agent ensemble...
+     ```
 
 ---
 

@@ -14,12 +14,21 @@
 import IORedis from "ioredis";
 
 function buildConnection(): IORedis {
-  const url = process.env.UPSTASH_REDIS_URL;
+  let url = process.env.UPSTASH_REDIS_URL;
   if (!url) {
     throw new Error(
       "[redis] UPSTASH_REDIS_URL is not set. " +
-        "Copy it from your Upstash console → Redis → REST API → ioredis URL."
+        "Copy it from your Upstash console → Redis → Details → ioredis URL (rediss://...)."
     );
+  }
+
+  // If the user provided the REST URL (https://) instead of the ioredis URI (rediss://)
+  if (url.startsWith("https://")) {
+    const host = url.replace("https://", "").replace(/\/$/, "");
+    const token = process.env.UPSTASH_REDIS_TOKEN || "";
+    if (token) {
+      url = `rediss://default:${token}@${host}:6379`;
+    }
   }
 
   return new IORedis(url, {
