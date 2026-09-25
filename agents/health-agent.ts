@@ -149,27 +149,27 @@ export async function recordRunToFirestore(
   runData: Omit<RepoRunRecord, "id" | "createdAt"> & { createdAt?: number }
 ): Promise<string> {
   try {
-    const sanitize = (val: unknown): unknown => {
-      if (val === undefined) return null;
-      if (val === null || typeof val !== "object") return val;
-      if (Array.isArray(val)) return val.map(sanitize);
-      const res: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-        if (v !== undefined) {
-          res[k] = sanitize(v);
-        }
-      }
-      return res;
-    };
-
-    const rawRecord: Record<string, unknown> = {
-      ...runData,
+    const record: Record<string, unknown> = {
       installationId: String(runData.installationId),
-      pullNumber: runData.pullNumber ?? null,
+      repo: runData.repo,
+      owner: runData.owner ?? "",
+      repoName: runData.repoName ?? "",
+      sha: runData.sha ?? "",
+      event: runData.event ?? "push",
+      pullNumber: typeof runData.pullNumber === "number" ? runData.pullNumber : null,
+      decision: runData.decision,
+      secretCount: runData.secretCount ?? 0,
+      criticalCount: runData.criticalCount ?? 0,
+      highCount: runData.highCount ?? 0,
+      mediumCount: runData.mediumCount ?? 0,
+      lowCount: runData.lowCount ?? 0,
+      dialogueTriggered: Boolean(runData.dialogueTriggered),
+      seoScore: runData.seoScore ?? 100,
+      seoDefectCount: runData.seoDefectCount ?? 0,
       createdAt: runData.createdAt || Date.now(),
+      commitMessage: runData.commitMessage || "",
+      summary: runData.summary || "",
     };
-
-    const record = sanitize(rawRecord) as Record<string, unknown>;
 
     // Save to top-level "runs"
     const docRef = await adminDb.collection("runs").add(record);

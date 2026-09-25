@@ -81,7 +81,7 @@ export async function generateAICompletion(
 
   // Calculate total prompt characters to guide routing
   const totalPromptChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
-  const isLargeContext = totalPromptChars > 16_000;
+  const isLargeContext = totalPromptChars > 10_000;
 
   const groqApiKey = process.env.GROQ_API_KEY;
   const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -96,13 +96,15 @@ export async function generateAICompletion(
       const conversationMessages = messages.filter((m) => m.role !== "system");
 
       const systemInstruction = systemMessages.length > 0
-        ? { parts: systemMessages.map((m) => ({ text: m.content })) }
+        ? { parts: systemMessages.map((m) => ({ text: m.content || "" })) }
         : undefined;
 
-      const contents = conversationMessages.map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
+      const contents = conversationMessages
+        .filter((m) => Boolean(m.content && m.content.trim()))
+        .map((m) => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [{ text: m.content || "" }],
+        }));
 
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`;
       const res = await fetch(url, {

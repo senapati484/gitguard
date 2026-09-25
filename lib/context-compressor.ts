@@ -171,7 +171,7 @@ export function extractCompressedHunks(diff: string): CompressedHunk[] {
  */
 export function batchHunksForInference(
   hunks: CompressedHunk[],
-  maxBatchChars = 16_000
+  maxBatchChars = 8_000
 ): HunkBatch[] {
   if (hunks.length === 0) return [];
 
