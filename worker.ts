@@ -29,6 +29,7 @@ import {
   type GitHubEventJobData,
 } from "@/lib/queues/github-events";
 import { gitGuardGraph } from "@/agents/orchestrator";
+import { recordRunToFirestore } from "@/agents/health-agent";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -213,6 +214,46 @@ async function processGitHubEvent(
     `[worker] LangGraph execution finished. Verdict: ${graphResult.decision}`
   );
 
+  const confirmedSecrets = (graphResult.secretFindings || []).filter((s) => s.confirmed);
+  const criticalCount =
+    (graphResult.bugFindings || []).filter((b) => b.severity === "critical").length +
+    (graphResult.securityFindings || []).filter(
+      (s) => s.isExploitable && s.severity === "critical"
+    ).length;
+  const highCount =
+    (graphResult.bugFindings || []).filter((b) => b.severity === "high").length +
+    (graphResult.securityFindings || []).filter(
+      (s) => s.isExploitable && s.severity === "high"
+    ).length;
+  const mediumCount =
+    (graphResult.bugFindings || []).filter((b) => b.severity === "medium").length +
+    (graphResult.securityFindings || []).filter(
+      (s) => !s.isExploitable || s.severity === "medium"
+    ).length;
+  const lowCount =
+    (graphResult.bugFindings || []).filter((b) => b.severity === "low").length +
+    (graphResult.securityFindings || []).filter((s) => s.severity === "low").length;
+
+  // Persist run history to Firestore for 30-day health score & badge
+  await recordRunToFirestore({
+    installationId,
+    repo,
+    owner: repoOwner,
+    repoName: repoShortName,
+    sha,
+    event,
+    pullNumber,
+    decision: graphResult.decision,
+    secretCount: confirmedSecrets.length,
+    criticalCount,
+    highCount,
+    mediumCount,
+    lowCount,
+    dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,
+  }).catch((err) => {
+    console.warn(`[worker] Failed to record run to Firestore:`, err);
+  });
+
   return {
     repo,
     sha,
@@ -221,7 +262,7 @@ async function processGitHubEvent(
     files,
     diffLength: diffContent.length,
     decision: graphResult.decision,
-    secretCount: (graphResult.secretFindings || []).filter((s) => s.confirmed).length,
+    secretCount: confirmedSecrets.length,
     bugCount: (graphResult.bugFindings || []).length,
     securityCount: (graphResult.securityFindings || []).length,
     dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,

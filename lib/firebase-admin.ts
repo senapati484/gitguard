@@ -5,7 +5,11 @@
  * Import only in Route Handlers, Server Components, middleware, and server actions.
  * Adding "server-only" causes a build-time error if accidentally imported in a client bundle.
  */
-import "server-only";
+if (typeof window !== "undefined") {
+  throw new Error(
+    "Firebase Admin SDK can only be imported in server-side or worker environments."
+  );
+}
 import * as admin from "firebase-admin";
 import type { App } from "firebase-admin/app";
 import type { Auth } from "firebase-admin/auth";
