@@ -17,9 +17,12 @@ export default async function HomePage() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           {/* Logo Mark */}
           <Link href="/" className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white shadow-sm">
+            <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white shadow-sm shrink-0" style={{ width: "2rem", height: "2rem" }}>
               <svg
-                className="w-4 h-4"
+                className="w-4 h-4 shrink-0"
+                width={16}
+                height={16}
+                style={{ width: "1rem", height: "1rem" }}
                 fill="none"
                 stroke="currentColor"
                 strokeWidth={2}

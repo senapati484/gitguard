@@ -34,7 +34,10 @@ export default async function LoginPage({
             {/* Shield icon */}
             <svg
               aria-hidden="true"
-              className="h-8 w-8 text-primary-foreground"
+              className="h-8 w-8 text-primary-foreground shrink-0"
+              width={32}
+              height={32}
+              style={{ width: "2rem", height: "2rem" }}
               fill="none"
               stroke="currentColor"
               strokeWidth={1.5}

@@ -67,17 +67,8 @@ export default async function DashboardPage() {
         const runsSnap = await adminDb
           .collection("runs")
           .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-          .orderBy("createdAt", "desc")
-          .limit(10)
-          .get()
-          .catch(() => {
-            // Fallback if index is creating
-            return adminDb
-              .collection("runs")
-              .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-              .limit(10)
-              .get();
-          });
+          .limit(20)
+          .get();
 
         if (runsSnap && !runsSnap.empty) {
           runs = runsSnap.docs.map((d) => ({

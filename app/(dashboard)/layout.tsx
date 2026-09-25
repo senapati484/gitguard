@@ -34,7 +34,10 @@ export default async function DashboardLayout({
           {/* Shield icon */}
           <svg
             aria-hidden="true"
-            className="h-6 w-6 text-primary"
+            className="h-6 w-6 text-primary shrink-0"
+            width={24}
+            height={24}
+            style={{ width: "1.5rem", height: "1.5rem" }}
             fill="none"
             stroke="currentColor"
             strokeWidth={1.5}

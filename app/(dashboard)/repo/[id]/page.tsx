@@ -84,17 +84,8 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
     const runsSnap = await adminDb
       .collection("runs")
       .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-      .orderBy("createdAt", "desc")
       .limit(50)
-      .get()
-      .catch(() => {
-        // Fallback without composite index
-        return adminDb
-          .collection("runs")
-          .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-          .limit(50)
-          .get();
-      });
+      .get();
 
     if (runsSnap && !runsSnap.empty) {
       runs = runsSnap.docs.map((d) => ({
