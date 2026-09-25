@@ -45,4 +45,14 @@ function getAdminApp(): App {
 export const adminAuth: Auth = admin.auth(getAdminApp());
 
 /** Firebase Admin Firestore — server-side reads and writes. */
-export const adminDb: Firestore = admin.firestore(getAdminApp());
+function getAdminDb(): Firestore {
+  const db = admin.firestore(getAdminApp());
+  try {
+    db.settings({ ignoreUndefinedProperties: true });
+  } catch {
+    // settings already configured or initialized
+  }
+  return db;
+}
+
+export const adminDb: Firestore = getAdminDb();

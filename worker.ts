@@ -410,6 +410,14 @@ worker.on("failed", (job: Job<GitHubEventJobData> | undefined, err: Error) => {
 });
 
 worker.on("error", (err: Error) => {
+  // Upstash serverless resets idle sockets after 60-120s; BullMQ reconnects automatically
+  if (
+    err.message.includes("ETIMEDOUT") ||
+    err.message.includes("Stream isn't writeable") ||
+    err.message.includes("ECONNRESET")
+  ) {
+    return;
+  }
   console.error(`[worker] Redis or Worker error:`, err.message);
 });
 

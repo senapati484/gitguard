@@ -6,6 +6,7 @@ import { adminDb } from "@/lib/firebase-admin";
 import { checkInstallationQuota } from "@/lib/plan-limits";
 import type { InstallationPlanInfo } from "@/lib/plan-config";
 import { TeamPolicyForm } from "@/components/dashboard/TeamPolicyForm";
+import { getUserInstallationDocs } from "@/lib/installations";
 
 export const metadata: Metadata = {
   title: "Team Policy & Audit Logs | GitGuard",
@@ -27,13 +28,9 @@ export default async function TeamSettingsPage() {
   if (!uid) redirect("/login");
 
   // Fetch user's installations from Firestore
-  const snapshot = await adminDb
-    .collection("installations")
-    .where("adminUids", "array-contains", uid)
-    .limit(25)
-    .get();
+  const installationDocs = await getUserInstallationDocs(uid);
 
-  const rawInstallations = snapshot.docs.map((doc) => ({
+  const rawInstallations = installationDocs.map((doc) => ({
     id: doc.id,
     ...(doc.data() as {
       installationId: number | string;

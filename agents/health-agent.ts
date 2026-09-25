@@ -149,11 +149,20 @@ export async function recordRunToFirestore(
   runData: Omit<RepoRunRecord, "id" | "createdAt"> & { createdAt?: number }
 ): Promise<string> {
   try {
-    const record: RepoRunRecord = {
+    const rawRecord: Record<string, unknown> = {
       ...runData,
       installationId: String(runData.installationId),
+      pullNumber: runData.pullNumber ?? null,
       createdAt: runData.createdAt || Date.now(),
     };
+
+    // Strip any keys with undefined values to guarantee clean Firestore insertion
+    const record: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rawRecord)) {
+      if (value !== undefined) {
+        record[key] = value;
+      }
+    }
 
     // Save to top-level "runs"
     const docRef = await adminDb.collection("runs").add(record);

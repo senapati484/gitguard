@@ -188,6 +188,9 @@ export async function fetchGitGuardIgnore(
       repo,
       path: ".gitguardignore",
       ref,
+      request: {
+        signal: AbortSignal.timeout(2500),
+      },
     });
 
     if ("content" in res.data && typeof res.data.content === "string") {
@@ -196,10 +199,11 @@ export async function fetchGitGuardIgnore(
       parsedRules = parseGitGuardIgnore(rawText);
     }
   } catch (err: unknown) {
-    // 404 is normal if repo does not have .gitguardignore
+    // 404 is normal if repo does not have .gitguardignore; timeouts or network issues should fail gracefully
     const status = (err as { status?: number })?.status;
+    const msg = (err as Error)?.message || String(err);
     if (status !== 404) {
-      console.warn(`[gitguard-ignore] Could not fetch .gitguardignore from ${owner}/${repo}:`, err);
+      console.log(`[gitguard-ignore] No .gitguardignore loaded from ${owner}/${repo} (${msg})`);
     }
   }
 

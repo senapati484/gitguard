@@ -38,6 +38,10 @@ function buildConnection(): IORedis {
     enableOfflineQueue: false,
     // Batch commands automatically to reduce RTT on Upstash
     enableAutoPipelining: true,
+    // TCP keep-alive prevents Upstash serverless from dropping idle connections
+    keepAlive: 10_000,
+    connectTimeout: 10_000,
+    family: 4,
     // Upstash uses TLS (rediss://); set rejectUnauthorized: false for dev
     tls: url.startsWith("rediss://") ? { rejectUnauthorized: false } : undefined,
     // Exponential back-off, cap at 10 s, give up after 10 attempts

@@ -4,6 +4,7 @@ import { getSessionUid } from "@/lib/auth-session";
 import { adminDb } from "@/lib/firebase-admin";
 import { getAlertSettings } from "@/agents/email-agent";
 import { AlertSettingsForm } from "@/components/dashboard/AlertSettingsForm";
+import { getUserInstallationDocs } from "@/lib/installations";
 
 export const metadata: Metadata = {
   title: "Alert Settings | GitGuard",
@@ -21,13 +22,9 @@ export default async function AlertSettingsPage() {
   if (!uid) redirect("/login");
 
   // Fetch this user's installations from Firestore
-  const snapshot = await adminDb
-    .collection("installations")
-    .where("adminUids", "array-contains", uid)
-    .limit(20)
-    .get();
+  const installationDocs = await getUserInstallationDocs(uid);
 
-  const installations = snapshot.docs.map((doc) => ({
+  const installations = installationDocs.map((doc) => ({
     id: doc.id,
     installationId: doc.data().installationId ?? doc.id,
   }));

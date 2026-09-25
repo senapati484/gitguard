@@ -20,8 +20,12 @@ const SESSION_COOKIE = "__session";
 
 /** Routes that are always public — no redirect even if unauthenticated. */
 const PUBLIC_PATHS = [
+  "/",
   "/login",
+  "/install",
+  "/api/badge",
   "/api/auth/session",
+  "/api/auth/custom-token",
   "/api/auth/callback",
   "/api/setup",
   "/api/github/setup",
@@ -29,7 +33,8 @@ const PUBLIC_PATHS = [
 ];
 
 function isPublic(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
+  if (pathname === "/") return true;
+  return PUBLIC_PATHS.some((p) => p !== "/" && (pathname === p || pathname.startsWith(p + "/")));
 }
 
 export function middleware(req: NextRequest): NextResponse {

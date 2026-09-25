@@ -8,6 +8,7 @@ import {
   PricingPlansView,
   type InstallationPlanInfo,
 } from "@/components/dashboard/PricingPlansView";
+import { getUserInstallationDocs } from "@/lib/installations";
 
 export const metadata: Metadata = {
   title: "Plans & Pricing | GitGuard",
@@ -25,13 +26,9 @@ export default async function PricingPage() {
   if (!uid) redirect("/login");
 
   // 1. Fetch user's installations
-  const snapshot = await adminDb
-    .collection("installations")
-    .where("adminUids", "array-contains", uid)
-    .limit(25)
-    .get();
+  const installationDocs = await getUserInstallationDocs(uid);
 
-  const rawInstallations = snapshot.docs.map((doc) => ({
+  const rawInstallations = installationDocs.map((doc) => ({
     id: doc.id,
     ...(doc.data() as {
       installationId: number | string;

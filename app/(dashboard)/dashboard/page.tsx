@@ -6,6 +6,7 @@ import { adminDb } from "@/lib/firebase-admin";
 import { calculateHealthScore, type RepoRunRecord } from "@/lib/health-score";
 import { getIgnoredAuditRecords, type IgnoredAuditRecord } from "@/lib/gitguard-ignore";
 import type { PlanTier, BillingProvider } from "@/lib/plan-config";
+import { getUserInstallationDocs } from "@/lib/installations";
 
 export const metadata: Metadata = {
   title: "Dashboard | GitGuard",
@@ -40,14 +41,10 @@ export default async function DashboardPage() {
   const uid = await getSessionUid();
   if (!uid) redirect("/login");
 
-  // 1. Fetch user's installations
-  const snapshot = await adminDb
-    .collection("installations")
-    .where("adminUids", "array-contains", uid)
-    .limit(25)
-    .get();
+  // 1. Fetch user's installations (with auto-claim for active GitHub installations)
+  const installationDocs = await getUserInstallationDocs(uid);
 
-  const rawInstallations = snapshot.docs.map((doc) => ({
+  const rawInstallations = installationDocs.map((doc) => ({
     id: doc.id,
     ...(doc.data() as {
       installationId: number | string;
