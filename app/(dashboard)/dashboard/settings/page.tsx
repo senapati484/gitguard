@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getSessionUid } from "@/lib/auth-session";
-import { adminDb } from "@/lib/firebase-admin";
 import { getAlertSettings } from "@/agents/email-agent";
 import { AlertSettingsForm } from "@/components/dashboard/AlertSettingsForm";
 import { getUserInstallationDocs } from "@/lib/installations";

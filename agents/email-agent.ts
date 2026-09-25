@@ -56,6 +56,8 @@ export interface ActionableFinding {
   title: string;
   description: string;
   nextAction: string;
+  originalCode?: string;
+  suggestedChange?: string;
 }
 
 // ── 2. Nodemailer Transporter ─────────────────────────────────────────────────
@@ -230,6 +232,8 @@ export function resolveActionableFindings(
       title: `Bug (${b.category || "logic"}): ${b.message.slice(0, 70)}`,
       description: b.message,
       nextAction,
+      originalCode: b.originalCode,
+      suggestedChange: b.suggestedChange,
     });
   }
 
@@ -271,20 +275,30 @@ export function resolveActionableFindings(
   return items;
 }
 
-// ── 5. Responsive HTML & Text Email Templates ─────────────────────────────────
+function escapeHtml(str: string): string {
+  if (!str) return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
-function buildAlertEmailHtml(
+export function buildAlertEmailHtml(
   payload: VerdictAlertPayload,
   findings: ActionableFinding[],
   recipient: string
 ): string {
   const { repo, sha, decision, pullNumber, event } = payload;
   const isBlock = decision === "BLOCK";
-  const statusColor = isBlock ? "#dc2626" : "#d97706";
-  const statusBg = isBlock ? "#fef2f2" : "#fffbeb";
-  const statusBorder = isBlock ? "#f87171" : "#fcd34d";
-  const statusEmoji = isBlock ? "🚨" : "⚠️";
   const shortSha = sha.slice(0, 7);
+
+  const statusBadge = isBlock
+    ? `<span style="display: inline-block; background: #000000; color: #ffffff; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">● BLOCK</span>`
+    : decision === "WARN"
+    ? `<span style="display: inline-block; background: #ffffff; color: #000000; border: 1.5px solid #000000; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">▲ WARN</span>`
+    : `<span style="display: inline-block; background: #f5f5f5; color: #171717; border: 1px solid #e5e5e5; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">✔ PASS</span>`;
 
   const prOrCommitUrl = pullNumber
     ? `https://github.com/${repo}/pull/${pullNumber}`
@@ -292,47 +306,63 @@ function buildAlertEmailHtml(
 
   const findingsHtml = findings
     .map((f, idx) => {
-      const sevColor =
+      const sevBadge =
         f.severity === "critical"
-          ? "#dc2626"
+          ? `<span style="display: inline-block; background: #000000; color: #ffffff; padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">CRITICAL</span>`
           : f.severity === "high"
-          ? "#ea580c"
+          ? `<span style="display: inline-block; background: #262626; color: #ffffff; padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">HIGH</span>`
           : f.severity === "medium"
-          ? "#d97706"
-          : "#2563eb";
+          ? `<span style="display: inline-block; background: #e5e5e5; color: #171717; padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">MEDIUM</span>`
+          : `<span style="display: inline-block; background: #f5f5f5; color: #525252; padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">LOW</span>`;
+
+      const codeFixHtml = f.suggestedChange
+        ? `
+          <div style="margin-top: 12px; background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: #f8fafc; overflow-x: auto;">
+            <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 700; letter-spacing: 0.06em; margin-bottom: 8px;">
+              ⚡ Proposed Auto-Fix Solution
+            </div>
+            ${
+              f.originalCode
+                ? `<div style="color: #f87171; background: rgba(239,68,68,0.1); padding: 3px 6px; border-radius: 3px; margin-bottom: 4px; white-space: pre-wrap; font-family: ui-monospace, monospace;">- ${escapeHtml(f.originalCode)}</div>`
+                : ""
+            }
+            <div style="color: #4ade80; background: rgba(34,197,94,0.1); padding: 3px 6px; border-radius: 3px; white-space: pre-wrap; font-weight: 500; font-family: ui-monospace, monospace;">+ ${escapeHtml(f.suggestedChange)}</div>
+          </div>
+        `
+        : "";
 
       return `
-        <div style="border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 16px; background-color: #ffffff; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-          <!-- Finding Header -->
-          <div style="background-color: #f8fafc; padding: 12px 16px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
-            <div style="font-size: 13px; font-weight: 600; color: #1e293b;">
-              #${idx + 1} &nbsp;
-              <span style="display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; color: #ffffff; background-color: ${sevColor};">
-                ${f.severity}
+        <div style="border: 1px solid #e5e5e5; border-radius: 8px; margin-bottom: 16px; background-color: #ffffff; overflow: hidden;">
+          <!-- Card Header Table -->
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #fafafa; border-bottom: 1px solid #e5e5e5;">
+            <tr>
+              <td style="padding: 10px 14px; font-size: 12px; font-weight: 600; color: #0a0a0a;">
+                <span style="color: #737373; margin-right: 6px;">#${idx + 1}</span>
+                ${sevBadge}
+                <span style="margin-left: 8px; color: #171717;">${escapeHtml(f.title)}</span>
+              </td>
+              <td align="right" style="padding: 10px 14px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">
+                <a href="${f.fileUrl}" style="color: #000000; text-decoration: underline; font-weight: 600;" target="_blank">
+                  ${escapeHtml(f.file)}:${f.line} ↗
+                </a>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Card Body -->
+          <div style="padding: 16px 14px;">
+            <div style="font-size: 13px; color: #262626; line-height: 1.55; margin-bottom: 10px;">
+              ${escapeHtml(f.description)}
+            </div>
+
+            ${codeFixHtml}
+
+            <!-- Remediation Action Callout -->
+            <div style="margin-top: 12px; background: #fafafa; border-left: 3px solid #000000; padding: 10px 12px; font-size: 12px; color: #171717; line-height: 1.55;">
+              <span style="font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; color: #525252; display: block; margin-bottom: 2px;">
+                Remediation Step
               </span>
-              &nbsp; ${f.title}
-            </div>
-            <div style="font-size: 12px; font-family: monospace;">
-              <a href="${f.fileUrl}" style="color: #2563eb; text-decoration: underline; font-weight: 500;" target="_blank">
-                ${f.file}:${f.line} ↗
-              </a>
-            </div>
-          </div>
-
-          <!-- Finding Body -->
-          <div style="padding: 16px;">
-            <div style="font-size: 13px; color: #475569; line-height: 1.5; margin-bottom: 12px;">
-              <strong>Details:</strong> ${f.description}
-            </div>
-
-            <!-- One Clear Next Action -->
-            <div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 12px 14px; border-radius: 0 6px 6px 0;">
-              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #1e40af; letter-spacing: 0.5px; margin-bottom: 4px;">
-                ⚡ One Clear Next Action
-              </div>
-              <div style="font-size: 13px; color: #1e3a8a; line-height: 1.5; font-weight: 500;">
-                ${f.nextAction}
-              </div>
+              ${escapeHtml(f.nextAction)}
             </div>
           </div>
         </div>
@@ -342,101 +372,106 @@ function buildAlertEmailHtml(
 
   return `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GitGuard Verdict Alert: ${decision} for ${repo}</title>
+  <title>GitGuard Alert: ${decision} for ${repo}</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a;">
-  <div style="max-width: 680px; margin: 30px auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+<body style="margin: 0; padding: 24px 12px; background-color: #fafafa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0a0a0a;">
+  <div style="max-width: 620px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; border: 1px solid #e5e5e5; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
     
-    <!-- Top Header Bar -->
-    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px 32px; color: #ffffff;">
-      <div style="display: flex; align-items: center; justify-content: space-between;">
-        <div>
-          <span style="font-size: 20px; font-weight: 800; letter-spacing: -0.5px;">🛡️ GitGuard</span>
-          <span style="font-size: 12px; margin-left: 8px; color: #94a3b8; font-weight: 500;">Automated Code Quality & Security</span>
-        </div>
-        <div style="background-color: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-family: monospace;">
-          sha: ${shortSha}
-        </div>
-      </div>
-    </div>
+    <!-- Top Nav Header -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 16px 20px; border-bottom: 1px solid #e5e5e5; background: #ffffff;">
+      <tr>
+        <td align="left" style="vertical-align: middle;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="vertical-align: middle; padding-right: 10px;">
+                <div style="width: 26px; height: 26px; border-radius: 6px; background-color: #000000; text-align: center; line-height: 26px; display: inline-block;">
+                  <span style="color: #ffffff; font-size: 13px; font-weight: 800;">🛡</span>
+                </div>
+              </td>
+              <td style="vertical-align: middle;">
+                <span style="font-size: 15px; font-weight: 800; letter-spacing: -0.01em; color: #000000;">GitGuard</span>
+                <span style="font-size: 11px; margin-left: 6px; padding: 2px 6px; border-radius: 4px; background: #f5f5f5; border: 1px solid #e5e5e5; color: #525252; font-family: ui-monospace, monospace;">v1.2</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+        <td align="right" style="vertical-align: middle;">
+          <a href="${prOrCommitUrl}" style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #f5f5f5; border: 1px solid #e5e5e5; padding: 4px 8px; border-radius: 4px; color: #171717; text-decoration: none;" target="_blank">
+            ${pullNumber ? `PR #${pullNumber}` : `sha: ${shortSha}`} ↗
+          </a>
+        </td>
+      </tr>
+    </table>
 
     <!-- Verdict Banner -->
-    <div style="background-color: ${statusBg}; border-bottom: 2px solid ${statusBorder}; padding: 20px 32px;">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="font-size: 28px;">${statusEmoji}</span>
-        <div>
-          <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: ${statusColor};">
-            Verdict: ${decision} — ${isBlock ? "Action Required Before Merging" : "Review Recommended"}
-          </h1>
-          <p style="margin: 4px 0 0 0; font-size: 14px; color: #475569;">
-            Repository <strong>${repo}</strong> ${pullNumber ? `(Pull Request #${pullNumber})` : `(Commit ${shortSha})`}
-          </p>
-        </div>
+    <div style="padding: 24px 20px; border-bottom: 1px solid #e5e5e5; background: #ffffff;">
+      <div style="margin-bottom: 12px;">
+        ${statusBadge}
       </div>
+      <h1 style="margin: 0 0 8px 0; font-size: 19px; font-weight: 700; color: #000000; letter-spacing: -0.02em; line-height: 1.3;">
+        ${isBlock ? "Merge Blocked — Critical Defects Detected" : "Review Recommended — Quality Regressions Detected"}
+      </h1>
+      <p style="margin: 0; font-size: 13px; color: #525252; line-height: 1.5;">
+        Automated verification for repository <strong style="color: #000000;">${repo}</strong> on ${event || "push"} event.
+      </p>
     </div>
 
-    <!-- Review Metadata -->
-    <div style="padding: 24px 32px; border-bottom: 1px solid #f1f5f9;">
-      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-        <tr>
-          <td style="padding: 6px 0; color: #64748b; width: 140px;"><strong>Repository:</strong></td>
-          <td style="padding: 6px 0; font-weight: 600;"><a href="https://github.com/${repo}" style="color: #2563eb; text-decoration: none;">${repo}</a></td>
-        </tr>
-        <tr>
-          <td style="padding: 6px 0; color: #64748b;"><strong>Commit / PR:</strong></td>
-          <td style="padding: 6px 0;">
-            <a href="${prOrCommitUrl}" style="color: #2563eb; text-decoration: underline; font-weight: 600;" target="_blank">
-              ${pullNumber ? `Pull Request #${pullNumber}` : `Commit ${shortSha}`} ↗
+    <!-- 3-Column Metrics Bar -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background: #fafafa; border-bottom: 1px solid #e5e5e5;">
+      <tr>
+        <td style="padding: 14px 18px; border-right: 1px solid #e5e5e5; width: 33.33%;">
+          <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #737373; margin-bottom: 4px;">Status</div>
+          <div style="font-size: 13px; font-weight: 700; color: #000000;">${decision}</div>
+        </td>
+        <td style="padding: 14px 18px; border-right: 1px solid #e5e5e5; width: 33.33%;">
+          <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #737373; margin-bottom: 4px;">Actionable Items</div>
+          <div style="font-size: 13px; font-weight: 700; color: #000000;">${findings.length} defect${findings.length === 1 ? "" : "s"}</div>
+        </td>
+        <td style="padding: 14px 18px; width: 33.33%;">
+          <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #737373; margin-bottom: 4px;">Target Ref</div>
+          <div style="font-size: 13px; font-weight: 600; font-family: ui-monospace, monospace; color: #000000;">
+            <a href="${prOrCommitUrl}" style="color: #000000; text-decoration: underline;" target="_blank">
+              ${pullNumber ? `PR #${pullNumber}` : shortSha}
             </a>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding: 6px 0; color: #64748b;"><strong>Trigger Event:</strong></td>
-          <td style="padding: 6px 0; text-transform: capitalize;">${event || "pull_request"}</td>
-        </tr>
-        <tr>
-          <td style="padding: 6px 0; color: #64748b;"><strong>Flagged Defects:</strong></td>
-          <td style="padding: 6px 0; font-weight: 600; color: ${statusColor};">
-            ${findings.length} actionable item${findings.length === 1 ? "" : "s"} identified
-          </td>
-        </tr>
-      </table>
-    </div>
+          </div>
+        </td>
+      </tr>
+    </table>
 
     <!-- Findings Section -->
-    <div style="padding: 24px 32px;">
-      <h2 style="margin: 0 0 16px 0; font-size: 16px; font-weight: 700; color: #1e293b;">
-        🔍 Specific Findings & Remediation Steps
+    <div style="padding: 24px 20px;">
+      <h2 style="margin: 0 0 16px 0; font-size: 13px; font-weight: 700; color: #000000; text-transform: uppercase; letter-spacing: 0.05em;">
+        Actionable Defects &amp; Code Solutions
       </h2>
 
       ${
         findings.length > 0
           ? findingsHtml
-          : `<div style="padding: 16px; background-color: #f8fafc; border-radius: 8px; color: #64748b; font-size: 13px;">
-               ${payload.summary || "No individual code locations were flagged, but review thresholds triggered this alert."}
+          : `<div style="padding: 16px; background-color: #fafafa; border: 1px solid #e5e5e5; border-radius: 6px; color: #737373; font-size: 13px; line-height: 1.5;">
+               ${escapeHtml(payload.summary || "No individual code lines were flagged, but review thresholds triggered this alert.")}
              </div>`
       }
 
-      <!-- Action Button -->
-      <div style="margin-top: 28px; text-align: center;">
-        <a href="${prOrCommitUrl}" style="display: inline-block; background-color: #0f172a; color: #ffffff; padding: 12px 28px; border-radius: 6px; font-size: 14px; font-weight: 600; text-decoration: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1);" target="_blank">
-          View Diff &amp; Triage on GitHub ↗
+      <!-- Primary Action CTA -->
+      <div style="margin-top: 24px; text-align: center;">
+        <a href="${prOrCommitUrl}" style="display: inline-block; background-color: #000000; color: #ffffff; padding: 12px 28px; border-radius: 6px; font-size: 13px; font-weight: 600; text-decoration: none; letter-spacing: 0.01em;" target="_blank">
+          View &amp; Triage on GitHub ↗
         </a>
       </div>
     </div>
 
     <!-- Footer -->
-    <div style="background-color: #f8fafc; padding: 20px 32px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; line-height: 1.5;">
+    <div style="background-color: #fafafa; padding: 16px 20px; border-top: 1px solid #e5e5e5; font-size: 11px; color: #737373; line-height: 1.5;">
       <div>
-        This automated security notification was sent to <strong>${recipient}</strong> for installation <code>${payload.installationId}</code>.
+        Automated security verification dispatched to <strong>${recipient}</strong> for installation <code>${payload.installationId}</code>.
       </div>
-      <div style="margin-top: 6px;">
-        To manage notification thresholds or add team recipients, visit the 
-        <a href="${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/settings" style="color: #2563eb; text-decoration: underline;">GitGuard Alert Settings</a>.
+      <div style="margin-top: 4px;">
+        To manage notification thresholds or recipients, visit your 
+        <a href="${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/settings" style="color: #000000; text-decoration: underline;">GitGuard Settings</a>.
       </div>
     </div>
 
@@ -446,7 +481,7 @@ function buildAlertEmailHtml(
   `;
 }
 
-function buildAlertEmailText(
+export function buildAlertEmailText(
   payload: VerdictAlertPayload,
   findings: ActionableFinding[]
 ): string {

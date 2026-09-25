@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUid } from "@/lib/auth-session";
-import { adminDb } from "@/lib/firebase-admin";
 import { checkInstallationQuota } from "@/lib/plan-limits";
 import {
   PricingPlansView,

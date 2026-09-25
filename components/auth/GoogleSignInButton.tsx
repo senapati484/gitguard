@@ -7,7 +7,6 @@
  * Handles loading state, error display, and post-sign-in redirect.
  */
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 
 interface GoogleSignInButtonProps {
