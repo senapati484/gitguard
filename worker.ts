@@ -30,6 +30,7 @@ import {
 } from "@/lib/queues/github-events";
 import { runSecretScan } from "@/agents/secret-agent";
 import { runBugScan } from "@/agents/bug-agent";
+import { runCommitAgent } from "@/agents/commit-agent";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -43,6 +44,7 @@ interface ProcessedDiffResult {
   confirmedSecretsCount?: number;
   bugScanPassed?: boolean;
   bugCount?: number;
+  suggestedCommitMessage?: string;
 }
 
 /**
@@ -217,6 +219,18 @@ async function processGitHubEvent(
     }),
   ]);
 
+  // 5. Dispatch to Commit Agent using diff + BugAgent context
+  console.log(`[worker] Dispatching to Commit Agent with BugAgent context...`);
+  const commitResult = await runCommitAgent({
+    octokit,
+    owner: repoOwner,
+    repo: repoShortName,
+    sha,
+    diff: diffContent,
+    bugFindings: bugScanResult.bugs,
+    pullNumber,
+  });
+
   return {
     repo,
     sha,
@@ -229,6 +243,7 @@ async function processGitHubEvent(
     confirmedSecretsCount: secretScanResult.confirmedCount,
     bugScanPassed: bugScanResult.passed,
     bugCount: bugScanResult.bugs.length,
+    suggestedCommitMessage: commitResult.commitMessage,
   };
 }
 
