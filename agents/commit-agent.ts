@@ -17,6 +17,7 @@
 import type { Octokit } from "@octokit/core";
 import { generateAICompletion } from "@/lib/ai-client";
 import type { BugFinding } from "@/agents/bug-agent";
+import { extractCompressedHunks } from "@/lib/context-compressor";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -83,12 +84,17 @@ export async function generateConventionalCommit(
   diff: string,
   bugFindings: BugFinding[]
 ): Promise<CommitMessageResult> {
-  const truncatedDiff = diff.length > 8000 ? `${diff.slice(0, 8000)}\n\n[...diff truncated]` : diff;
+  const hunks = extractCompressedHunks(diff);
+  const diffContext =
+    hunks.length > 0
+      ? hunks
+          .slice(0, 10)
+          .map((h) => `File: ${h.file}\n\`\`\`diff\n${h.diffText.slice(0, 1200)}\n\`\`\``)
+          .join("\n\n")
+      : diff.slice(0, 4000);
 
-  const userPrompt = `Git Diff:
-\`\`\`diff
-${truncatedDiff}
-\`\`\`
+  const userPrompt = `Git Changes Summary:
+${diffContext}
 
 BugAgent Findings Context:
 ${

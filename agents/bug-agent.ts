@@ -22,6 +22,11 @@
 import type { Octokit } from "@octokit/core";
 import { generateAICompletion } from "@/lib/ai-client";
 import {
+  extractCompressedHunks,
+  batchHunksForInference,
+  type CompressedHunk,
+} from "@/lib/context-compressor";
+import {
   fetchGitGuardIgnore,
   checkIsIgnored,
   logIgnoredFindingToFirestore,
@@ -136,105 +141,16 @@ function shouldInspectFile(filename: string): boolean {
 }
 
 /**
- * Extracts ONLY the changed hunks (not the full files) from a unified diff.
+ * Extracts ONLY the changed hunks (not the full files) from a unified diff,
+ * filtering noise and compressing unchanged context.
  */
 export function extractChangedHunks(diff: string): ChangedHunk[] {
-  if (!diff || !diff.trim()) return [];
-
-  const hunks: ChangedHunk[] = [];
-  const lines = diff.split("\n");
-
-  let currentFile = "";
-  let currentHunkLines: string[] = [];
-  let hunkStartLine = 0;
-  let hunkHeader = "";
-  let addedLinesCount = 0;
-
-  function flushCurrentHunk() {
-    if (currentFile && currentHunkLines.length > 0 && addedLinesCount > 0) {
-      hunks.push({
-        file: currentFile,
-        startLine: hunkStartLine,
-        endLine: hunkStartLine + currentHunkLines.length,
-        hunkHeader,
-        diffText: currentHunkLines.join("\n"),
-        addedLinesCount,
-      });
-    }
-    currentHunkLines = [];
-    addedLinesCount = 0;
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (line.startsWith("diff --git ")) {
-      flushCurrentHunk();
-      const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-      currentFile = match ? match[2] : "";
-    } else if (line.startsWith("+++ b/")) {
-      currentFile = line.slice(6);
-    } else if (line.startsWith("@@ ")) {
-      flushCurrentHunk();
-      if (!shouldInspectFile(currentFile)) continue;
-
-      hunkHeader = line;
-      const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      hunkStartLine = match ? parseInt(match[1], 10) : 1;
-      currentHunkLines.push(line);
-    } else if (currentHunkLines.length > 0) {
-      if (!shouldInspectFile(currentFile)) continue;
-
-      currentHunkLines.push(line);
-      if (line.startsWith("+") && !line.startsWith("+++")) {
-        addedLinesCount++;
-      }
-    }
-  }
-
-  flushCurrentHunk();
-  return hunks;
+  return extractCompressedHunks(diff);
 }
 
-// ── 2. AI Bug Detection (Groq + Gemini Fallback) ───────────────────────────────
+// ── 2. AI Bug Detection (Groq + Gemini Fallback with Multi-Batch Routing) ──────
 
-export async function detectBugsInHunks(
-  hunks: ChangedHunk[]
-): Promise<BugFinding[]> {
-  if (hunks.length === 0) return [];
-
-  // Group hunks by file to keep diff context coherent
-  const rawHunks = hunks
-    .map(
-      (h) =>
-        `File: ${h.file}\nHunk: ${h.hunkHeader}\n\`\`\`diff\n${h.diffText}\n\`\`\``
-    )
-    .join("\n\n---\n\n");
-
-  // Safety cap at 24KB to prevent 413 / rate limit errors on giant multi-file diffs
-  const MAX_DIFF_CHARS = 24_000;
-  const formattedHunks =
-    rawHunks.length > MAX_DIFF_CHARS
-      ? rawHunks.slice(0, MAX_DIFF_CHARS) +
-        "\n\n[Notice: Large commit diff truncated to first 24KB of hunks for model context]"
-      : rawHunks;
-
-  const userPrompt = `Analyze the following changed code hunks for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${formattedHunks}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "confidence", "category", "message", "originalCode", "suggestedReplacement" }] }`;
-
-  const rawCompletion = await generateAICompletion({
-    messages: [
-      { role: "system", content: BUG_ANALYSIS_SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: 0.1,
-    jsonMode: true,
-  });
-
-  if (!rawCompletion) {
-    console.log(`[bug-agent] No AI response returned for bug analysis.`);
-    return [];
-  }
-
+function parseBugFindings(rawCompletion: string): BugFinding[] {
   try {
     const cleanJson = rawCompletion.replace(/```(?:json)?/g, "").trim();
     const parsed = JSON.parse(cleanJson);
@@ -285,6 +201,50 @@ export async function detectBugsInHunks(
     console.warn(`[bug-agent] Failed to parse AI bug response:`, rawCompletion);
     return [];
   }
+}
+
+export async function detectBugsInHunks(
+  hunks: ChangedHunk[]
+): Promise<BugFinding[]> {
+  if (hunks.length === 0) return [];
+
+  // Partition hunks into batches sized appropriately for model inference
+  const batches = batchHunksForInference(hunks as CompressedHunk[], 18_000);
+  console.log(
+    `[bug-agent] Compressed and batched into ${batches.length} slice(s) for AI bug analysis (${hunks.length} hunk(s)).`
+  );
+
+  const batchResults = await Promise.all(
+    batches.map(async (batch) => {
+      const userPrompt = `Analyze the following changed code hunks (Batch ${batch.batchIndex}/${batch.totalBatches}) for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${batch.promptContext}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "confidence", "category", "message", "originalCode", "suggestedReplacement" }] }`;
+
+      const rawCompletion = await generateAICompletion({
+        messages: [
+          { role: "system", content: BUG_ANALYSIS_SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.1,
+        jsonMode: true,
+      });
+
+      if (!rawCompletion) return [];
+      return parseBugFindings(rawCompletion);
+    })
+  );
+
+  // Flatten and deduplicate findings across batches
+  const allBugs = batchResults.flat();
+  const seen = new Set<string>();
+  const uniqueBugs: BugFinding[] = [];
+  for (const b of allBugs) {
+    const key = `${b.file}:${b.line}:${b.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueBugs.push(b);
+    }
+  }
+
+  return uniqueBugs;
 }
 
 // ── 3. GitHub Suggested Change Publisher ──────────────────────────────────────
@@ -506,8 +466,7 @@ export async function runBugScan({
     });
     console.log(`[bug-agent] Posted SUCCESS check run for ${owner}/${repo}`);
   } else if (hasFailingBugs) {
-    // High-confidence bugs are posted as suggested changes instead of plain annotations
-    const annotations = annotationBugs.map((bug) => ({
+    const annotations = activeBugs.map((bug) => ({
       path: bug.file,
       start_line: bug.line,
       end_line: bug.line,
@@ -515,8 +474,10 @@ export async function runBugScan({
         bug.severity === "critical" || bug.severity === "high"
           ? ("failure" as const)
           : ("warning" as const),
-      title: `${bug.severity.toUpperCase()}: Bug Detected`,
-      message: bug.message,
+      title: `${bug.severity.toUpperCase()}: ${bug.category || "Bug"} Detected`,
+      message: bug.suggestedChange
+        ? `${bug.message}\n\nSuggested Fix:\n${bug.suggestedChange}`
+        : bug.message,
     }));
 
     const markdownList = activeBugs
@@ -560,13 +521,15 @@ export async function runBugScan({
     console.log(`[bug-agent] Posted FAILURE check run for ${owner}/${repo}`);
   } else {
     // Warnings only (below threshold) -> conclusion: "neutral"
-    const annotations = annotationBugs.map((bug) => ({
+    const annotations = activeBugs.map((bug) => ({
       path: bug.file,
       start_line: bug.line,
       end_line: bug.line,
       annotation_level: "warning" as const,
-      title: `${bug.severity.toUpperCase()}: Potential Issue`,
-      message: bug.message,
+      title: `${bug.severity.toUpperCase()}: ${bug.category || "Potential"} Issue`,
+      message: bug.suggestedChange
+        ? `${bug.message}\n\nSuggested Fix:\n${bug.suggestedChange}`
+        : bug.message,
     }));
 
     const markdownList = warningBugs

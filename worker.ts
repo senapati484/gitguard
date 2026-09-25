@@ -316,7 +316,7 @@ async function processGitHubEvent(
     (graphResult.bugFindings || []).filter((b) => b.severity === "low").length +
     (graphResult.securityFindings || []).filter((s) => s.severity === "low").length;
 
-  // Persist run history to Firestore for 30-day health score & badge
+  // Persist run history to Firestore for 30-day health score & badge (storing commit ID, verdict & metrics — NOT full diff)
   await recordRunToFirestore({
     installationId,
     repo,
@@ -334,6 +334,8 @@ async function processGitHubEvent(
     dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,
     seoScore: graphResult.seoScore ?? 100,
     seoDefectCount: (graphResult.seoFindings || []).length,
+    commitMessage: graphResult.commitMessage || "",
+    summary: (graphResult.summaryComment || "").slice(0, 300),
   }).catch((err) => {
     console.warn(`[worker] Failed to record run to Firestore:`, err);
   });

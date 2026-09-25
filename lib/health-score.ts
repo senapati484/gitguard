@@ -38,6 +38,8 @@ export interface RepoRunRecord {
   // SEO & Web Vitals
   seoScore?: number; // 0 - 100
   seoDefectCount?: number;
+  commitMessage?: string;
+  summary?: string;
 }
 
 export interface HealthRubricWeights {
