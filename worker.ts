@@ -28,6 +28,7 @@ import {
   GITHUB_EVENTS_QUEUE,
   type GitHubEventJobData,
 } from "@/lib/queues/github-events";
+import { runSecretScan } from "@/agents/secret-agent";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -37,6 +38,8 @@ interface ProcessedDiffResult {
   files: string[];
   diffLength: number;
   diffSummary?: string;
+  secretScanPassed?: boolean;
+  confirmedSecretsCount?: number;
 }
 
 /**
@@ -192,6 +195,16 @@ async function processGitHubEvent(
     console.log(`[worker] Changed files: ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` (+${files.length - 5} more)` : ""}`);
   }
 
+  // 4. Dispatch diff to Secret Agent for security scanning and check run creation
+  console.log(`[worker] Dispatching to Secret Agent...`);
+  const secretScanResult = await runSecretScan({
+    octokit,
+    owner: repoOwner,
+    repo: repoShortName,
+    sha,
+    diff: diffContent,
+  });
+
   return {
     repo,
     sha,
@@ -200,6 +213,8 @@ async function processGitHubEvent(
     files,
     diffLength: diffContent.length,
     diffSummary: `diffUrl: ${diffUrl}`,
+    secretScanPassed: secretScanResult.passed,
+    confirmedSecretsCount: secretScanResult.confirmedCount,
   };
 }
 
