@@ -38,6 +38,8 @@ export interface OrgPolicy {
   requiredAgents: RequiredAgentName[];
   severityThresholds: SeverityThresholds;
   customSecretPatterns: CustomSecretPattern[];
+  debateMode?: boolean; // Team-only: Run multi-agent cross-examination debate before final verdict
+  maxDebateRounds?: number; // Capped at 2 rounds for latency
   updatedAt?: number;
   updatedBy?: {
     uid: string;
@@ -57,6 +59,8 @@ export const ALL_AGENT_NAMES: RequiredAgentName[] = [
 
 export const DEFAULT_ORG_POLICY: OrgPolicy = {
   enabled: true,
+  debateMode: true,
+  maxDebateRounds: 2,
   requiredAgents: ["SecretAgent", "BugAgent", "SecurityAgent", "CommitAgent", "HealthAgent"],
   severityThresholds: {
     blockThreshold: "HIGH",

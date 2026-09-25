@@ -48,6 +48,7 @@ import {
   checkIsIgnored,
   logIgnoredFindingToFirestore,
 } from "@/lib/gitguard-ignore";
+import { PipelineProfiler } from "@/lib/profiler";
 import type { OrgPolicy } from "@/lib/team-policy-types";
 
 // ── 1. LangGraph State Annotation ─────────────────────────────────────────────
@@ -65,6 +66,10 @@ export const GitGuardStateAnnotation = Annotation.Root({
     default: () => "free",
   }),
   policy: Annotation<OrgPolicy | undefined>({
+    reducer: (curr, next) => next ?? curr,
+    default: () => undefined,
+  }),
+  profiler: Annotation<PipelineProfiler | undefined>({
     reducer: (curr, next) => next ?? curr,
     default: () => undefined,
   }),
@@ -95,10 +100,22 @@ export const GitGuardStateAnnotation = Annotation.Root({
     default: () => 0,
   }),
 
-  // Dialogue notes between BugAgent and SecurityAgent
+  // Dialogue & Multi-Agent Debate
+  debateMode: Annotation<boolean | undefined>({
+    reducer: (curr, next) => next ?? curr,
+    default: () => undefined,
+  }),
+  dialogueRoundsCompleted: Annotation<number>({
+    reducer: (curr, next) => next ?? curr ?? 0,
+    default: () => 0,
+  }),
   dialogueNotes: Annotation<string[]>({
     reducer: (curr, next) => (next ? [...(curr ?? []), ...next] : curr ?? []),
     default: () => [],
+  }),
+  pipelinePerformanceSummary: Annotation<string | undefined>({
+    reducer: (curr, next) => next ?? curr,
+    default: () => undefined,
   }),
 
   // Synthesized outputs
@@ -311,18 +328,36 @@ async function seoAgentNode(state: GitGuardState): Promise<Partial<GitGuardState
  * Join Barrier: Wait for all 4 parallel scanner branches to arrive.
  */
 async function joinScannersNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
+  if (state.profiler) {
+    state.profiler.markAgentsEnd();
+    state.profiler.markDebateStart();
+  }
   return state;
 }
 
 /**
- * Conditional Edge: Check if BugAgent and SecurityAgent flagged the same file + line.
- * (Dialogue arbitration is enabled on Pro / Team plans).
+ * Conditional Edge: Decides whether to route to dialogue_node (multi-agent debate or collision dialogue)
+ * or proceed directly to orchestrator_node.
  */
 function checkCollisionCondition(state: GitGuardState): "dialogue_node" | "orchestrator_node" {
   if (state.plan === "free") {
     return "orchestrator_node";
   }
 
+  // 1. Team-Only Multi-Agent Debate Mode:
+  // Runs a full cross-examination debate round across all agents (not just overlapping findings)
+  const isTeamDebate =
+    state.plan === "team" &&
+    (state.policy?.debateMode === true || state.debateMode === true);
+
+  if (isTeamDebate) {
+    console.log(
+      `[graph:conditional] 🗣️ Team Debate Mode active — routing to multi-agent dialogue_node (Round 1/2 max)...`
+    );
+    return "dialogue_node";
+  }
+
+  // 2. Standard Pro / Team file:line collision reconciliation
   const { bugFindings = [], securityFindings = [] } = state;
   for (const b of bugFindings) {
     for (const s of securityFindings) {
@@ -334,13 +369,127 @@ function checkCollisionCondition(state: GitGuardState): "dialogue_node" | "orche
       }
     }
   }
+
   return "orchestrator_node";
 }
 
 /**
- * Dialogue Node: Conducts a reconciliation dialogue between BugAgent and SecurityAgent.
+ * Conditional Edge after dialogue_node:
+ * In Debate Mode, checks if a 2nd rebuttal round is warranted, strictly capped at 2 rounds for latency.
+ */
+function checkDebateContinuationCondition(
+  state: GitGuardState
+): "dialogue_node" | "orchestrator_node" {
+  const isTeamDebate =
+    state.plan === "team" &&
+    (state.policy?.debateMode === true || state.debateMode === true);
+
+  const completed = state.dialogueRoundsCompleted || 0;
+  const maxRounds = Math.min(state.policy?.maxDebateRounds ?? 2, 2);
+
+  // If already ran 2 rounds, or not in debate mode, or clean run, proceed to orchestrator
+  if (!isTeamDebate || completed >= maxRounds) {
+    return "orchestrator_node";
+  }
+
+  // Only run a 2nd round if high-severity cross-agent conflicts exist
+  const hasHighSeverityConflict =
+    ((state.bugFindings || []).some((b) => b.severity === "critical" || b.severity === "high") &&
+      (state.securityFindings || []).some((s) => s.severity === "critical" || s.severity === "high")) ||
+    ((state.secretFindings || []).some((s) => s.confirmed) && (state.bugFindings || []).length > 0);
+
+  if (hasHighSeverityConflict && completed < 2) {
+    console.log(
+      `[graph:conditional] Cross-agent severity conflict detected — executing 2nd debate round (${completed + 1}/${maxRounds})...`
+    );
+    return "dialogue_node";
+  }
+
+  return "orchestrator_node";
+}
+
+/**
+ * Dialogue Node: Conducts either:
+ *   A. Team-Only Full Multi-Agent Debate across all 4 agents (capped at 2 rounds).
+ *   B. Standard Collision Dialogue between BugAgent and SecurityAgent for overlapping lines.
  */
 async function dialogueNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
+  const currentRound = (state.dialogueRoundsCompleted || 0) + 1;
+  const isTeamDebate =
+    state.plan === "team" &&
+    (state.policy?.debateMode === true || state.debateMode === true);
+
+  // ── A. Team-Only Full Multi-Agent Debate Mode ─────────────────────────────
+  if (isTeamDebate) {
+    console.log(
+      `[graph:dialogue_node] 🗣️ Running Multi-Agent Debate (Round ${currentRound}/2 max) across all agents...`
+    );
+
+    const confirmedSecrets = (state.secretFindings || []).filter((s) => s.confirmed);
+    const bugs = state.bugFindings || [];
+    const securityIssues = state.securityFindings || [];
+    const seoIssues = state.seoFindings || [];
+
+    const totalDefects =
+      confirmedSecrets.length + bugs.length + securityIssues.length + seoIssues.length;
+
+    // Fast-path latency optimization: If zero defects across all agents, instant consensus in <1ms!
+    if (totalDefects === 0) {
+      console.log(`[graph:dialogue_node] Clean changeset — instant debate consensus: PASS.`);
+      state.profiler?.markDebateEnd(currentRound);
+      return {
+        dialogueNotes: [
+          `[Debate Round ${currentRound}] All 4 agents (SecretAgent, BugAgent, SecurityAgent, SEOAgent) independently verified the changeset with zero defects or security flaws. Cross-agent consensus: PASS.`,
+        ],
+        dialogueRoundsCompleted: currentRound,
+      };
+    }
+
+    const debatePrompt = `You are moderating a fast, high-signal multi-agent peer review debate between 4 code analysis agents (Round ${currentRound} of 2 max):
+1. SecretAgent: ${confirmedSecrets.length} confirmed credential leak(s)
+${confirmedSecrets.map((s) => `  - ${s.file}:${s.line} — ${s.reason}`).join("\n") || "  - None"}
+
+2. BugAgent: ${bugs.length} correctness bug(s)
+${bugs.map((b) => `  - [${b.severity.toUpperCase()}] ${b.file}:${b.line}: ${b.message}`).join("\n") || "  - None"}
+
+3. SecurityAgent: ${securityIssues.length} security vulnerability(ies)
+${securityIssues.map((s) => `  - [${s.severity.toUpperCase()}] [${s.isExploitable ? "EXPLOITABLE" : "MITIGATED"}] ${s.file}:${s.line} (${s.ruleId}): ${s.description}\n    Analysis: ${s.exploitabilityAssessment}`).join("\n") || "  - None"}
+
+4. SEOAgent: ${seoIssues.length} SEO / Web Vitals issue(s) (Score: ${state.seoScore ?? 100}/100)
+${seoIssues.map((s) => `  - [${s.severity.toUpperCase()}] ${s.file}:${s.line}: ${s.message}`).join("\n") || "  - None"}
+
+CROSS-EXAMINATION DIRECTIVES:
+1. Cross-Impact: Does any correctness bug compromise security sanitization or leak data?
+2. False-Positive Defense: Critique whether any flagged issue is defended by architectural context or test isolation.
+3. Unified Verdict Consensus: Reach definitive alignment on BLOCK vs WARN vs PASS and identify the single priority action.
+
+Provide a concise, punchy consensus summary under 200 words.`;
+
+    const debateSynthesis = await generateAICompletion({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an elite Staff Software Architect moderating a rapid multi-agent peer review debate. Synthesize findings concisely.",
+        },
+        { role: "user", content: debatePrompt },
+      ],
+      temperature: 0.1,
+      jsonMode: false,
+      preferredModel: "sonnet",
+    });
+
+    state.profiler?.markDebateEnd(currentRound);
+    return {
+      dialogueNotes: [
+        ...(state.dialogueNotes || []),
+        `[Debate Round ${currentRound}] ${debateSynthesis}`,
+      ],
+      dialogueRoundsCompleted: currentRound,
+    };
+  }
+
+  // ── B. Standard Collision Dialogue (Overlapping file:line) ─────────────────
   const collisions: { bug: BugFinding; security: SecurityFinding }[] = [];
   for (const b of state.bugFindings || []) {
     for (const s of state.securityFindings || []) {
@@ -350,7 +499,10 @@ async function dialogueNode(state: GitGuardState): Promise<Partial<GitGuardState
     }
   }
 
-  if (collisions.length === 0) return {};
+  if (collisions.length === 0) {
+    state.profiler?.markDebateEnd(currentRound);
+    return { dialogueRoundsCompleted: currentRound };
+  }
 
   console.log(
     `[graph:dialogue_node] Running consensus dialogue for ${collisions.length} collision(s)...`
@@ -390,7 +542,14 @@ Return a concise synthesis statement.`;
     preferredModel: "sonnet",
   });
 
-  return { dialogueNotes: [dialogueSynthesis] };
+  state.profiler?.markDebateEnd(currentRound);
+  return {
+    dialogueNotes: [
+      ...(state.dialogueNotes || []),
+      `[Collision Reconciliation] ${dialogueSynthesis}`,
+    ],
+    dialogueRoundsCompleted: currentRound,
+  };
 }
 
 /**
@@ -399,6 +558,7 @@ Return a concise synthesis statement.`;
  * and publishes GitHub Check Runs and PR comments.
  */
 async function orchestratorNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
+  state.profiler?.markOrchestratorStart();
   console.log(`[graph:orchestrator_node] Synthesizing final verdict with Sonnet...`);
 
   const policy = state.policy;
@@ -602,9 +762,24 @@ Structure:
     finalComment += `\n\n> 🛡️ **.gitguardignore**: ${state.ignoredCount} finding(s) matched valid exemption rules with documented justifications and were skipped from merge blocking.`;
   }
 
-  // Append Org-Wide Policy notice if active
-  if (state.policy && state.policy.enabled && !finalComment.includes("Org-Wide Policy Enforced")) {
-    finalComment += `\n\n> 🏢 **Org-Wide Policy Enforced (Team Tier)**: Block: \`${state.policy.severityThresholds.blockThreshold}\` | Warn: \`${state.policy.severityThresholds.warnThreshold}\` | Min Health: \`${state.policy.severityThresholds.minHealthScoreToPass}%\` | Custom Secret Rules: \`${state.policy.customSecretPatterns?.length || 0}\``;
+  // Append Multi-Agent Dialogue & Debate notes if present
+  if ((state.dialogueNotes || []).length > 0 && !finalComment.includes("Multi-Agent Dialogue & Debate")) {
+    const debateBlocks = state.dialogueNotes!
+      .map((note) => `> ${note.replace(/\n/g, "\n> ")}`)
+      .join("\n\n");
+    finalComment += `\n\n---\n### 🗣️ Multi-Agent Dialogue & Debate (${state.dialogueRoundsCompleted || state.dialogueNotes!.length} round(s))\n${debateBlocks}`;
+  }
+
+  // Append Pipeline Performance Profiler summary (from live profiler or precomputed summary)
+  if (state.profiler) {
+    state.profiler.markOrchestratorEnd();
+    state.profiler.logReport();
+    const liveBadge = state.profiler.toMarkdownBadge();
+    if (!finalComment.includes("Pipeline Performance")) {
+      finalComment += `\n\n${liveBadge}`;
+    }
+  } else if (state.pipelinePerformanceSummary && !finalComment.includes("Pipeline Performance")) {
+    finalComment += `\n\n${state.pipelinePerformanceSummary}`;
   }
 
   // 3. Post GitHub Check Runs
@@ -677,13 +852,16 @@ export const gitGuardGraph = new StateGraph(GitGuardStateAnnotation)
   .addEdge("security_agent", "join_scanners")
   .addEdge("seo_agent", "join_scanners")
 
-  // Conditional Edge: If BugAgent and SecurityAgent collide on file+line -> dialogue_node, else orchestrator_node
+  // Conditional Edge: If Debate Mode active or collision on file+line -> dialogue_node, else orchestrator_node
   .addConditionalEdges("join_scanners", checkCollisionCondition, {
     dialogue_node: "dialogue_node",
     orchestrator_node: "orchestrator_node",
   })
 
-  // Dialogue converges into Orchestrator node
-  .addEdge("dialogue_node", "orchestrator_node")
+  // Conditional Edge from dialogue_node: loop for 2nd debate round if high-severity conflicts, capped at 2
+  .addConditionalEdges("dialogue_node", checkDebateContinuationCondition, {
+    dialogue_node: "dialogue_node",
+    orchestrator_node: "orchestrator_node",
+  })
   .addEdge("orchestrator_node", END)
   .compile();

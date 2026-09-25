@@ -73,37 +73,57 @@ export function getApp(): App {
   return _app;
 }
 
+// ---------------------------------------------------------------------------
+// Installation token cache: GitHub tokens are valid for 1 hour (3600s).
+// We cache the authenticated Octokit instance for 55 minutes (with 5-minute safety buffer).
+// ---------------------------------------------------------------------------
+interface CachedOctokitEntry {
+  octokit: Octokit;
+  expiresAt: number;
+}
+
+const _installationTokenCache = new Map<number, CachedOctokitEntry>();
+
 /**
  * Exchanges the GitHub App JWT for a scoped installation access token and
  * returns an {@link Octokit} client authenticated as that installation.
  *
- * The token is cached internally by `@octokit/app` and refreshed before
- * expiry, so you can safely call this helper on every request.
+ * Caches the installation token and Octokit instance for 55 minutes (~1h GitHub validity)
+ * avoiding redundant JWT signing and access_tokens HTTP roundtrips.
  *
- * @param installationId - The numeric installation ID from the webhook
- *   payload (`payload.installation.id`).
- * @returns A promise resolving to an Octokit REST client scoped to the
- *   given installation's repositories and permissions.
- *
- * @throws If `GITHUB_APP_ID` or `GITHUB_APP_PRIVATE_KEY` are not set.
- * @throws If GitHub rejects the JWT (wrong App ID or expired/invalid key).
- *
- * @example
- * // Inside a webhook handler (after signature verification):
- * const installationId = payload.installation.id;
- * const octokit = await getInstallationOctokit(installationId);
- *
- * await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
- *   owner: "acme",
- *   repo: "my-repo",
- *   name: "GitGuard",
- *   head_sha: payload.after,
- *   status: "in_progress",
- * });
+ * @param installationId - The numeric installation ID from the webhook payload.
+ * @returns A promise resolving to an Octokit REST client.
  */
 export async function getInstallationOctokit(
   installationId: number
 ): Promise<Octokit> {
-  const app = getApp();
-  return app.getInstallationOctokit(installationId);
+  const result = await getInstallationOctokitWithMeta(installationId);
+  return result.octokit;
 }
+
+/**
+ * Returns the authenticated Octokit instance along with cache status metadata.
+ */
+export async function getInstallationOctokitWithMeta(
+  installationId: number
+): Promise<{ octokit: Octokit; cached: boolean }> {
+  const now = Date.now();
+  const cached = _installationTokenCache.get(installationId);
+
+  // Return cached client if token has > 3 minutes remaining
+  if (cached && cached.expiresAt > now + 3 * 60 * 1000) {
+    return { octokit: cached.octokit, cached: true };
+  }
+
+  const app = getApp();
+  const octokit = await app.getInstallationOctokit(installationId);
+
+  // Cache for 55 minutes (~1 hour validity)
+  _installationTokenCache.set(installationId, {
+    octokit,
+    expiresAt: now + 55 * 60 * 1000,
+  });
+
+  return { octokit, cached: false };
+}
+

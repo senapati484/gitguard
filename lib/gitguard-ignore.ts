@@ -162,9 +162,11 @@ export function checkIsIgnored(
   return { ignored: false };
 }
 
+const _ignoreRulesCache = new Map<string, { rules: GitGuardIgnoreRule[]; expiresAt: number }>();
+
 /**
  * Attempts to fetch .gitguardignore from the repository root via GitHub Octokit.
- * Falls back to empty rule set if file does not exist.
+ * Caches parsed rules for 10 minutes to eliminate redundant network roundtrips across agents.
  */
 export async function fetchGitGuardIgnore(
   octokit: Octokit,
@@ -172,6 +174,14 @@ export async function fetchGitGuardIgnore(
   repo: string,
   ref?: string
 ): Promise<GitGuardIgnoreRule[]> {
+  const cacheKey = `${owner.toLowerCase()}/${repo.toLowerCase()}:${ref || "HEAD"}`;
+  const now = Date.now();
+  const cached = _ignoreRulesCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.rules;
+  }
+
+  let parsedRules: GitGuardIgnoreRule[] = [];
   try {
     const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
       owner,
@@ -183,7 +193,7 @@ export async function fetchGitGuardIgnore(
     if ("content" in res.data && typeof res.data.content === "string") {
       const rawText = Buffer.from(res.data.content, "base64").toString("utf-8");
       console.log(`[gitguard-ignore] Loaded .gitguardignore from ${owner}/${repo}`);
-      return parseGitGuardIgnore(rawText);
+      parsedRules = parseGitGuardIgnore(rawText);
     }
   } catch (err: unknown) {
     // 404 is normal if repo does not have .gitguardignore
@@ -194,19 +204,26 @@ export async function fetchGitGuardIgnore(
   }
 
   // Fallback: check if Firestore repository settings store whitelisted rules
-  try {
-    const repoDoc = await adminDb.collection("repo_settings").doc(`${owner}__${repo}`).get();
-    if (repoDoc.exists) {
-      const data = repoDoc.data();
-      if (typeof data?.gitguardignoreContent === "string") {
-        return parseGitGuardIgnore(data.gitguardignoreContent);
+  if (parsedRules.length === 0) {
+    try {
+      const repoDoc = await adminDb.collection("repo_settings").doc(`${owner}__${repo}`).get();
+      if (repoDoc.exists) {
+        const data = repoDoc.data();
+        if (typeof data?.gitguardignoreContent === "string") {
+          parsedRules = parseGitGuardIgnore(data.gitguardignoreContent);
+        }
       }
+    } catch {
+      // Ignore Firestore lookup error
     }
-  } catch {
-    // Ignore Firestore lookup error
   }
 
-  return [];
+  _ignoreRulesCache.set(cacheKey, {
+    rules: parsedRules,
+    expiresAt: now + 10 * 60 * 1000,
+  });
+
+  return parsedRules;
 }
 
 /**

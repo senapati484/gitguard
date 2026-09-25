@@ -23,7 +23,10 @@ dotenv.config();
 
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection } from "@/lib/redis";
-import { getInstallationOctokit } from "@/lib/github-app";
+import {
+  getInstallationOctokit,
+  getInstallationOctokitWithMeta,
+} from "@/lib/github-app";
 import {
   GITHUB_EVENTS_QUEUE,
   type GitHubEventJobData,
@@ -37,6 +40,7 @@ import {
   type PlanTier,
 } from "@/lib/plan-limits";
 import { getInstallationPolicy, type OrgPolicy } from "@/lib/team-policy";
+import { PipelineProfiler } from "@/lib/profiler";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -75,6 +79,9 @@ async function processGitHubEvent(
     `\n[worker] Processing job id=${job.id} event=${event} repo=${repo} sha=${sha.slice(0, 7)}`
   );
 
+  // Initialize pipeline latency profiler to monitor <5s median target
+  const profiler = new PipelineProfiler(repo, sha);
+
   // 1. Resolve repository owner and name
   const [repoOwner, repoShortName] =
     owner && repoName ? [owner, repoName] : repo.split("/");
@@ -83,49 +90,47 @@ async function processGitHubEvent(
     throw new Error(`Invalid repo format "${repo}". Expected "owner/repo".`);
   }
 
-  // 2. Fetch authenticated Octokit instance for this installation
-  const octokit = await getInstallationOctokit(installationId);
+  // 2. Fetch authenticated Octokit instance for this installation (cached for 55m / ~1h validity)
+  profiler.markTokenStart();
+  const { octokit, cached } = await getInstallationOctokitWithMeta(installationId);
+  profiler.markTokenEnd(cached);
+
   console.log(
-    `[worker] Authenticated as GitHub App installation=${installationId} for ${repoOwner}/${repoShortName}`
+    `[worker] Authenticated as GitHub App installation=${installationId} for ${repoOwner}/${repoShortName} (${
+      cached ? "token CACHED ~1h" : "token FETCHED"
+    })`
   );
 
   let filesChanged = 0;
   let files: string[] = [];
   let diffContent = "";
 
-  // 3. Pull diff and changed files via GitHub API
+  // 3. Pull diff and changed files via GitHub API (Parallelized for <5s median latency)
+  profiler.markDiffStart();
   if (event === "pull_request" && pullNumber) {
     console.log(
-      `[worker] Fetching PR #${pullNumber} files and diff for ${repo}...`
+      `[worker] Fetching PR #${pullNumber} files and diff in parallel for ${repo}...`
     );
 
-    // Pull changed files list
-    const filesResp = await octokit.request(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
-      {
+    const [filesResp, diffResp] = await Promise.all([
+      octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
         owner: repoOwner,
         repo: repoShortName,
         pull_number: pullNumber,
         per_page: 100,
-      }
-    );
-
-    files = filesResp.data.map((f: { filename: string }) => f.filename);
-    filesChanged = files.length;
-
-    // Pull full unified diff
-    const diffResp = await octokit.request(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
-      {
+      }),
+      octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
         owner: repoOwner,
         repo: repoShortName,
         pull_number: pullNumber,
         headers: {
           accept: "application/vnd.github.v3.diff",
         },
-      }
-    );
+      }),
+    ]);
 
+    files = filesResp.data.map((f: { filename: string }) => f.filename);
+    filesChanged = files.length;
     diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
   } else {
     // Push event: compare before...sha or inspect commit
@@ -135,69 +140,55 @@ async function processGitHubEvent(
     if (hasValidBefore) {
       const basehead = `${before}...${sha}`;
       console.log(
-        `[worker] Comparing commits ${basehead} for ${repo}...`
+        `[worker] Comparing commits ${basehead} for ${repo} in parallel...`
       );
 
-      // Fetch compare details (file metadata)
-      const compareResp = await octokit.request(
-        "GET /repos/{owner}/{repo}/compare/{basehead}",
-        {
+      const [compareResp, diffResp] = await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
           owner: repoOwner,
           repo: repoShortName,
           basehead,
-        }
-      );
+        }),
+        octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+          owner: repoOwner,
+          repo: repoShortName,
+          basehead,
+          headers: {
+            accept: "application/vnd.github.v3.diff",
+          },
+        }),
+      ]);
 
       const changedFilesList = compareResp.data.files ?? [];
       files = changedFilesList.map((f: { filename: string }) => f.filename);
       filesChanged = files.length;
-
-      // Fetch unified diff for compare
-      const diffResp = await octokit.request(
-        "GET /repos/{owner}/{repo}/compare/{basehead}",
-        {
-          owner: repoOwner,
-          repo: repoShortName,
-          basehead,
-          headers: {
-            accept: "application/vnd.github.v3.diff",
-          },
-        }
-      );
-
       diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
     } else {
-      console.log(`[worker] Fetching commit ${sha} diff for ${repo}...`);
+      console.log(`[worker] Fetching commit ${sha} diff for ${repo} in parallel...`);
 
-      const commitResp = await octokit.request(
-        "GET /repos/{owner}/{repo}/commits/{ref}",
-        {
+      const [commitResp, diffResp] = await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
           owner: repoOwner,
           repo: repoShortName,
           ref: sha,
-        }
-      );
+        }),
+        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+          owner: repoOwner,
+          repo: repoShortName,
+          ref: sha,
+          headers: {
+            accept: "application/vnd.github.v3.diff",
+          },
+        }),
+      ]);
 
       const changedFilesList = commitResp.data.files ?? [];
       files = changedFilesList.map((f: { filename: string }) => f.filename);
       filesChanged = files.length;
-
-      // Fetch unified diff for single commit
-      const diffResp = await octokit.request(
-        "GET /repos/{owner}/{repo}/commits/{ref}",
-        {
-          owner: repoOwner,
-          repo: repoShortName,
-          ref: sha,
-          headers: {
-            accept: "application/vnd.github.v3.diff",
-          },
-        }
-      );
-
       diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
     }
   }
+  profiler.markDiffEnd();
 
   console.log(
     `[worker] Successfully retrieved diff for ${repo}: ${filesChanged} file(s) changed, ${diffContent.length} bytes diff`
@@ -206,8 +197,14 @@ async function processGitHubEvent(
     console.log(`[worker] Changed files: ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` (+${files.length - 5} more)` : ""}`);
   }
 
-  // 4. Check Plan & Monthly Quota (Free tier: 50 checks/mo, Pro/Team: unlimited)
-  const quota = await checkInstallationQuota(installationId);
+  // 4. Check Plan & Monthly Quota + Team Org-Wide Policy in parallel
+  profiler.markQuotaStart();
+  const [quota, fetchedPolicy] = await Promise.all([
+    checkInstallationQuota(installationId),
+    getInstallationPolicy(installationId).catch(() => undefined),
+  ]);
+  profiler.markQuotaEnd();
+
   console.log(
     `[worker] Installation ${installationId} tier: "${quota.plan.toUpperCase()}" (${quota.currentCount}/${quota.unlimited ? "∞" : quota.monthlyLimit} checks used in ${quota.resetMonth})`
   );
@@ -260,14 +257,27 @@ async function processGitHubEvent(
   // 5. Load Org-Wide Policy for Team plan installations
   let policy: OrgPolicy | undefined = undefined;
   if (quota.plan === "team") {
-    policy = await getInstallationPolicy(installationId);
-    console.log(
-      `[worker] Active Team Policy for installation ${installationId}: ${policy.requiredAgents.length} required agent(s), block threshold ${policy.severityThresholds.blockThreshold}, ${policy.customSecretPatterns.length} custom secret rule(s).`
-    );
+    policy = fetchedPolicy;
+    if (policy) {
+      console.log(
+        `[worker] Active Team Policy for installation ${installationId}: ${
+          policy.requiredAgents.length
+        } required agent(s), block threshold ${
+          policy.severityThresholds.blockThreshold
+        }, debateMode: ${policy.debateMode ?? true}, ${
+          policy.customSecretPatterns.length
+        } custom secret rule(s).`
+      );
+    }
   }
 
   // 6. Execute LangGraph State Graph (gated according to plan tier)
-  console.log(`[worker] Executing LangGraph orchestrator state graph (Plan: ${quota.plan.toUpperCase()})...`);
+  profiler.markAgentsStart();
+  console.log(
+    `[worker] Executing LangGraph orchestrator state graph (Plan: ${quota.plan.toUpperCase()}, DebateMode: ${
+      quota.plan === "team" && (policy?.debateMode ?? true)
+    })...`
+  );
   const graphResult = await gitGuardGraph.invoke({
     owner: repoOwner,
     repo: repoShortName,
@@ -278,6 +288,8 @@ async function processGitHubEvent(
     octokit,
     plan: quota.plan,
     policy,
+    debateMode: policy?.debateMode,
+    profiler,
   });
 
   console.log(

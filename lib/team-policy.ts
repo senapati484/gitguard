@@ -111,6 +111,12 @@ export async function updateInstallationPolicy(
     requiredAgents: newPolicy.requiredAgents || currentPolicy.requiredAgents,
     customSecretPatterns:
       newPolicy.customSecretPatterns || currentPolicy.customSecretPatterns,
+    debateMode:
+      newPolicy.debateMode !== undefined ? newPolicy.debateMode : currentPolicy.debateMode ?? true,
+    maxDebateRounds:
+      newPolicy.maxDebateRounds !== undefined
+        ? Math.min(newPolicy.maxDebateRounds, 2)
+        : currentPolicy.maxDebateRounds ?? 2,
     updatedAt: Date.now(),
     updatedBy: {
       uid: actor.uid || "system",
@@ -131,6 +137,9 @@ export async function updateInstallationPolicy(
   }
   if (JSON.stringify(currentPolicy.customSecretPatterns) !== JSON.stringify(mergedPolicy.customSecretPatterns)) {
     changedFields.push(`customSecretPatterns (${mergedPolicy.customSecretPatterns.length} rules)`);
+  }
+  if (currentPolicy.debateMode !== mergedPolicy.debateMode) {
+    changedFields.push(`debateMode: ${mergedPolicy.debateMode}`);
   }
   if (currentPolicy.enabled !== mergedPolicy.enabled) {
     changedFields.push(`policyEnabled: ${mergedPolicy.enabled}`);

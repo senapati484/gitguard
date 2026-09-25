@@ -553,6 +553,48 @@ export function TeamPolicyForm({
             </div>
           </div>
 
+          {/* Multi-Agent Debate Mode Card (Team Enterprise Feature) */}
+          <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-5 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🗣️</span>
+                  <h3 className="text-base font-semibold text-foreground">
+                    Multi-Agent Debate Mode
+                  </h3>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                    Team Plan
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Runs an extra cross-examination dialogue round between all agents (SecretAgent, BugAgent, SecurityAgent, SEOAgent) before the Orchestrator verdict. Evaluates cross-impact, false positives, and shared exploitability.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={policy.debateMode ?? true}
+                  onChange={(e) =>
+                    setPolicy((prev) => ({ ...prev, debateMode: e.target.checked }))
+                  }
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-muted peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-purple-500/20 text-xs">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <span className="text-emerald-400 font-semibold">⚡ Fast-Path Consensus:</span>
+                <span>Instant &lt;1ms agreement on clean diffs</span>
+              </div>
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <span className="text-amber-400 font-semibold">⏱️ Latency Guard:</span>
+                <span>Strictly capped at <strong>2 rounds</strong> (&lt;5s target)</span>
+              </div>
+            </div>
+          </div>
+
           {/* Required Agents Selection */}
           <div className="rounded-xl border border-border bg-card p-5 space-y-4">
             <div>
