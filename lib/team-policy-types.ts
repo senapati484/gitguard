@@ -60,7 +60,7 @@ export const ALL_AGENT_NAMES: RequiredAgentName[] = [
 
 export const DEFAULT_ORG_POLICY: OrgPolicy = {
   enabled: true,
-  scanOnPush: false, // Default to PRs only, preventing noisy push blocks and quota burn
+  scanOnPush: true, // Default to true so all git pushes are inspected for leaks and auto-solved
   debateMode: true,
   maxDebateRounds: 2,
   requiredAgents: ["SecretAgent", "BugAgent", "SecurityAgent", "CommitAgent", "HealthAgent"],
