@@ -31,6 +31,11 @@ import {
 import { gitGuardGraph } from "@/agents/orchestrator";
 import { recordRunToFirestore } from "@/agents/health-agent";
 import { sendVerdictAlert } from "@/agents/slack-agent";
+import {
+  checkInstallationQuota,
+  incrementInstallationCheckCount,
+  type PlanTier,
+} from "@/lib/plan-limits";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -200,8 +205,59 @@ async function processGitHubEvent(
     console.log(`[worker] Changed files: ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` (+${files.length - 5} more)` : ""}`);
   }
 
-  // 4. Execute LangGraph State Graph (SecretAgent, BugAgent, SecurityAgent in parallel -> collision dialogue -> Sonnet Orchestrator)
-  console.log(`[worker] Executing LangGraph orchestrator state graph...`);
+  // 4. Check Plan & Monthly Quota (Free tier: 50 checks/mo, Pro/Team: unlimited)
+  const quota = await checkInstallationQuota(installationId);
+  console.log(
+    `[worker] Installation ${installationId} tier: "${quota.plan.toUpperCase()}" (${quota.currentCount}/${quota.unlimited ? "∞" : quota.monthlyLimit} checks used in ${quota.resetMonth})`
+  );
+
+  if (!quota.allowed) {
+    console.warn(`[worker] Monthly quota exceeded for installation ${installationId}: ${quota.reason}`);
+
+    await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
+      owner: repoOwner,
+      repo: repoShortName,
+      name: "GitGuard / Orchestrator",
+      head_sha: sha,
+      status: "completed",
+      conclusion: "neutral",
+      output: {
+        title: "Monthly Free Plan Quota Reached (50/50 Checks)",
+        summary: `### ⚠️ Monthly Check Limit Exceeded (Free Plan)\n\nThis installation has consumed its free tier allowance of **50 checks** for **${quota.resetMonth}**.\n\nTo unlock unlimited checks and full multi-agent scanning (**SecurityAgent OWASP SAST**, **SEOAgent Web Vitals**, and **Consensus Dialogue**), upgrade to **Pro** or **Team**.\n\nVisit your [GitGuard Dashboard](/dashboard/pricing) to manage plans.`,
+      },
+    });
+
+    if (pullNumber) {
+      await octokit.request(
+        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+        {
+          owner: repoOwner,
+          repo: repoShortName,
+          issue_number: pullNumber,
+          body: `### ⚠️ GitGuard: Monthly Free Tier Quota Reached\n\nThis installation has reached its free limit of **50 checks** for **${quota.resetMonth}**.\n\n- **Free Plan**: 50 checks/month (SecretAgent, CommitAgent, basic BugAgent, Health score)\n- **Pro / Team**: Unlimited checks, Semgrep OWASP Top 10 SAST, Deep Exploitability Analysis, SEO & Web Vitals, and Dialogue arbitration.\n\n👉 Upgrade on your GitGuard dashboard to continue automated scanning.`,
+        }
+      ).catch(() => {});
+    }
+
+    return {
+      repo,
+      sha,
+      event,
+      filesChanged,
+      files,
+      diffLength: diffContent.length,
+      decision: "WARN",
+      secretCount: 0,
+      bugCount: 0,
+      securityCount: 0,
+    };
+  }
+
+  // Increment monthly checks counter
+  await incrementInstallationCheckCount(installationId, quota.installationDocId);
+
+  // 5. Execute LangGraph State Graph (gated according to plan tier)
+  console.log(`[worker] Executing LangGraph orchestrator state graph (Plan: ${quota.plan.toUpperCase()})...`);
   const graphResult = await gitGuardGraph.invoke({
     owner: repoOwner,
     repo: repoShortName,
@@ -210,6 +266,7 @@ async function processGitHubEvent(
     pullNumber,
     installationId,
     octokit,
+    plan: quota.plan,
   });
 
   console.log(

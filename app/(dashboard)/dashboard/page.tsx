@@ -5,6 +5,7 @@ import { getSessionUid } from "@/lib/auth-session";
 import { adminDb } from "@/lib/firebase-admin";
 import { calculateHealthScore, type RepoRunRecord } from "@/lib/health-score";
 import { getIgnoredAuditRecords, type IgnoredAuditRecord } from "@/lib/gitguard-ignore";
+import type { PlanTier } from "@/lib/plan-limits";
 
 export const metadata: Metadata = {
   title: "Dashboard | GitGuard",
@@ -16,6 +17,7 @@ interface InstallationWithStats {
   installationId: number | string;
   accountLogin?: string;
   setupAction?: string;
+  plan: PlanTier;
   recentRuns: RepoRunRecord[];
   healthScore: number;
   healthGrade: string;
@@ -50,6 +52,7 @@ export default async function DashboardPage() {
       installationId: number | string;
       accountLogin?: string;
       setupAction?: string;
+      plan?: PlanTier;
     }),
   }));
 
@@ -113,6 +116,7 @@ export default async function DashboardPage() {
         installationId: inst.installationId,
         accountLogin: inst.accountLogin || `Installation #${inst.installationId}`,
         setupAction: inst.setupAction || "active",
+        plan: (inst.plan as PlanTier) || "free",
         recentRuns: runs,
         healthScore: health.score,
         healthGrade: health.grade,
@@ -281,6 +285,18 @@ export default async function DashboardPage() {
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground border border-border">
                           ID: {inst.installationId}
                         </span>
+                        <Link
+                          href="/dashboard/pricing"
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider transition hover:opacity-80 ${
+                            inst.plan === "team"
+                              ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                              : inst.plan === "pro"
+                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                              : "bg-muted text-muted-foreground border-border"
+                          }`}
+                        >
+                          {inst.plan} plan
+                        </Link>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         Status: <span className="text-emerald-400 capitalize">{inst.setupAction}</span> • {inst.totalRuns} total run(s) recorded

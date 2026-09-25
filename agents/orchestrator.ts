@@ -59,6 +59,10 @@ export const GitGuardStateAnnotation = Annotation.Root({
   pullNumber: Annotation<number | undefined>(),
   installationId: Annotation<string | number | undefined>(),
   octokit: Annotation<Octokit>(),
+  plan: Annotation<"free" | "pro" | "team">({
+    reducer: (curr, next) => next ?? curr ?? "free",
+    default: () => "free",
+  }),
 
   // Findings from parallel nodes
   secretFindings: Annotation<SecretVerificationResult[]>({
@@ -192,14 +196,15 @@ async function bugAgentNode(state: GitGuardState): Promise<Partial<GitGuardState
       activeBugs.push(b);
     }
 
-    // Post high-confidence bug findings as GitHub suggested changes directly to the PR
+    // Post high-confidence bug findings as GitHub suggested changes directly to the PR (Pro & Team only)
     const highConfidenceBugs = activeBugs.filter(
       (b) =>
         (b.confidence === "high" || b.severity === "critical" || b.severity === "high") &&
         Boolean(b.suggestedChange && b.suggestedChange.trim().length > 0)
     );
 
-    if (highConfidenceBugs.length > 0) {
+    const isProOrTeam = state.plan === "pro" || state.plan === "team";
+    if (highConfidenceBugs.length > 0 && isProOrTeam) {
       await postBugSuggestedChanges({
         octokit: state.octokit,
         owner: state.owner,
@@ -213,7 +218,7 @@ async function bugAgentNode(state: GitGuardState): Promise<Partial<GitGuardState
     }
 
     console.log(
-      `[graph:bug_agent] Found ${activeBugs.length} bug finding(s) (${highConfidenceBugs.length} suggested changes, ${ignoredBugs} whitelisted)`
+      `[graph:bug_agent] Found ${activeBugs.length} bug finding(s) (${isProOrTeam ? highConfidenceBugs.length : 0} suggested changes, ${ignoredBugs} whitelisted)`
     );
     return { bugFindings: activeBugs, ignoredCount: ignoredBugs };
   } catch (err) {
@@ -225,8 +230,16 @@ async function bugAgentNode(state: GitGuardState): Promise<Partial<GitGuardState
 /**
  * SecurityAgent Node: Runs Semgrep OWASP Top 10 SAST and Dependency Audit,
  * then reasons about real-world exploitability vs theoretical CVEs before joining graph.
+ * (Gated to Pro / Team plans).
  */
 async function securityAgentNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
+  if (state.plan === "free") {
+    console.log(
+      `[graph:security_agent] Free tier active: SecurityAgent (Semgrep OWASP SAST & exploitability) is gated. Upgrade to Pro/Team to enable.`
+    );
+    return { securityFindings: [] };
+  }
+
   console.log(`[graph:security_agent] Running Semgrep SAST & Dependency Audit with exploitability reasoning...`);
   try {
     const findings = await detectSecurityVulnerabilities(state.diff);
@@ -245,9 +258,16 @@ async function securityAgentNode(state: GitGuardState): Promise<Partial<GitGuard
 /**
  * SEOAgent Node: Audits frontend files (.jsx, .tsx, .html) for meta tags, Open Graph,
  * image alt text, and layout-shifting inline styles (CLS).
- * Gated to only run when the diff touches frontend files.
+ * Gated to only run when the diff touches frontend files and on Pro / Team plans.
  */
 async function seoAgentNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
+  if (state.plan === "free") {
+    console.log(
+      `[graph:seo_agent] Free tier active: SEOAgent (Meta tags & Web Vitals) is gated. Upgrade to Pro/Team to enable.`
+    );
+    return { seoFindings: [], seoScore: undefined };
+  }
+
   console.log(`[graph:seo_agent] Checking frontend files for SEO, Open Graph, and CLS...`);
   try {
     const scanResult = await runSEOScan(state.diff);
@@ -290,8 +310,13 @@ async function joinScannersNode(state: GitGuardState): Promise<Partial<GitGuardS
 
 /**
  * Conditional Edge: Check if BugAgent and SecurityAgent flagged the same file + line.
+ * (Dialogue arbitration is enabled on Pro / Team plans).
  */
 function checkCollisionCondition(state: GitGuardState): "dialogue_node" | "orchestrator_node" {
+  if (state.plan === "free") {
+    return "orchestrator_node";
+  }
+
   const { bugFindings = [], securityFindings = [] } = state;
   for (const b of bugFindings) {
     for (const s of securityFindings) {

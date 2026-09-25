@@ -1,0 +1,74 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getSessionUid } from "@/lib/auth-session";
+import { adminDb } from "@/lib/firebase-admin";
+import { checkInstallationQuota } from "@/lib/plan-limits";
+import {
+  PricingPlansView,
+  type InstallationPlanInfo,
+} from "@/components/dashboard/PricingPlansView";
+
+export const metadata: Metadata = {
+  title: "Plans & Pricing | GitGuard",
+  description: "Explore GitGuard tiers, upcoming Stripe checkout, and agent execution gating.",
+};
+
+/**
+ * app/(dashboard)/dashboard/pricing/page.tsx
+ *
+ * Displays pricing tiers (Free vs Pro vs Team), upcoming Stripe integration notice,
+ * and a 1-click sandbox plan switcher for authorized installations.
+ */
+export default async function PricingPage() {
+  const uid = await getSessionUid();
+  if (!uid) redirect("/login");
+
+  // 1. Fetch user's installations
+  const snapshot = await adminDb
+    .collection("installations")
+    .where("adminUids", "array-contains", uid)
+    .limit(25)
+    .get();
+
+  const rawInstallations = snapshot.docs.map((doc) => ({
+    id: doc.id,
+    ...(doc.data() as {
+      installationId: number | string;
+      accountLogin?: string;
+    }),
+  }));
+
+  // 2. Map installation quotas & plan info
+  const installations: InstallationPlanInfo[] = await Promise.all(
+    rawInstallations.map(async (inst) => {
+      const quota = await checkInstallationQuota(inst.installationId);
+      return {
+        id: inst.id,
+        installationId: inst.installationId,
+        accountLogin: inst.accountLogin || `Installation #${inst.installationId}`,
+        plan: quota.plan,
+        monthlyChecksCount: quota.currentCount,
+        monthlyChecksLimit: quota.monthlyLimit === Infinity ? 999999 : quota.monthlyLimit,
+        unlimited: quota.unlimited,
+        resetMonth: quota.resetMonth,
+      };
+    })
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Breadcrumb Navigation */}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Link href="/dashboard" className="hover:text-foreground transition">
+          Dashboard
+        </Link>
+        <span>/</span>
+        <span className="text-foreground font-medium">Plans &amp; Pricing</span>
+      </div>
+
+      {/* Pricing View Component with local demo switcher */}
+      <PricingPlansView installations={installations} />
+    </div>
+  );
+}
