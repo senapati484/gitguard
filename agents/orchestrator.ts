@@ -114,14 +114,18 @@ async function bugAgentNode(state: GitGuardState): Promise<Partial<GitGuardState
 }
 
 /**
- * SecurityAgent Node: Analyzes changed hunks for OWASP Top 10 application security flaws.
+ * SecurityAgent Node: Runs Semgrep OWASP Top 10 SAST and Dependency Audit,
+ * then reasons about real-world exploitability vs theoretical CVEs before joining graph.
  */
 async function securityAgentNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
-  console.log(`[graph:security_agent] Analyzing changed hunks for security vulnerabilities...`);
+  console.log(`[graph:security_agent] Running Semgrep SAST & Dependency Audit with exploitability reasoning...`);
   try {
-    const hunks = extractChangedHunks(state.diff);
-    const findings = hunks.length > 0 ? await detectSecurityVulnerabilities(hunks) : [];
-    console.log(`[graph:security_agent] Found ${findings.length} security vulnerability finding(s)`);
+    const findings = await detectSecurityVulnerabilities(state.diff);
+    console.log(
+      `[graph:security_agent] Found ${findings.length} security finding(s) (${
+        findings.filter((f) => f.isExploitable).length
+      } confirmed exploitable)`
+    );
     return { securityFindings: findings };
   } catch (err) {
     console.error(`[graph:security_agent] Error analyzing security:`, err);
@@ -180,14 +184,16 @@ ${collisions
   .map(
     (c) => `Location: \`${c.bug.file}:${c.bug.line}\`
 - BugAgent: [${c.bug.severity.toUpperCase()}] ${c.bug.message}
-- SecurityAgent: [${c.security.severity.toUpperCase()}] (${c.security.ruleId}) ${c.security.description}
+- SecurityAgent: [${c.security.severity.toUpperCase()}] [${c.security.isExploitable ? "EXPLOITABLE" : "THEORETICAL/MITIGATED"}] (${c.security.ruleId}): ${c.security.description}
+  Exploitability Analysis: ${c.security.exploitabilityAssessment}
   Security fix: ${c.security.recommendation}`
   )
   .join("\n\n")}
 
 Conduct a concise dialogue between both agent perspectives:
 1. Reconcile root cause: Does this correctness bug directly introduce or amplify the security vulnerability?
-2. Synthesize unified recommendation: What is the combined severity and single remediation step?
+2. Real-world exploitability: Does the bug make an unexploitable sink exploitable?
+3. Synthesize unified recommendation: What is the combined severity and single remediation step?
 
 Return a concise synthesis statement.`;
 
@@ -220,18 +226,21 @@ async function orchestratorNode(state: GitGuardState): Promise<Partial<GitGuardS
   const criticalHighBugs = (state.bugFindings || []).filter(
     (b) => b.severity === "critical" || b.severity === "high"
   );
-  const criticalHighSecurity = (state.securityFindings || []).filter(
-    (s) => s.severity === "critical" || s.severity === "high"
+  // Real-world exploitability gate: Only confirmed exploitable critical/high issues block merge
+  const exploitableSecurityBlockers = (state.securityFindings || []).filter(
+    (s) => s.isExploitable && (s.severity === "critical" || s.severity === "high")
   );
 
   const hasBlockers =
     confirmedSecrets.length > 0 ||
     criticalHighBugs.length > 0 ||
-    criticalHighSecurity.length > 0;
+    exploitableSecurityBlockers.length > 0;
 
   const totalWarnings =
     (state.bugFindings || []).filter((b) => b.severity === "medium" || b.severity === "low").length +
-    (state.securityFindings || []).filter((s) => s.severity === "medium" || s.severity === "low").length;
+    (state.securityFindings || []).filter(
+      (s) => !s.isExploitable || s.severity === "medium" || s.severity === "low"
+    ).length;
 
   const decision: "PASS" | "WARN" | "BLOCK" = hasBlockers
     ? "BLOCK"
@@ -261,8 +270,15 @@ ${confirmedSecrets.map((s) => `- ${s.file}:${s.line} — ${s.reason}`).join("\n"
 2. BugAgent: ${(state.bugFindings || []).length} bug(s)
 ${(state.bugFindings || []).map((b) => `- [${b.severity.toUpperCase()}] ${b.file}:${b.line} — ${b.message}`).join("\n") || "None"}
 
-3. SecurityAgent: ${(state.securityFindings || []).length} vulnerability(ies)
-${(state.securityFindings || []).map((s) => `- [${s.severity.toUpperCase()}] ${s.file}:${s.line} (${s.ruleId}) — ${s.description}`).join("\n") || "None"}
+3. SecurityAgent: ${(state.securityFindings || []).length} vulnerability(ies) (${exploitableSecurityBlockers.length} confirmed exploitable blocker(s))
+${
+  (state.securityFindings || [])
+    .map(
+      (s) =>
+        `- [${s.severity.toUpperCase()}] [${s.isExploitable ? "🚨 EXPLOITABLE" : "⚠️ THEORETICAL/MITIGATED"}] ${s.file}:${s.line} (${s.ruleId}): ${s.description}\n  Exploitability Analysis: ${s.exploitabilityAssessment}${s.attackVector ? `\n  Attack Vector: ${s.attackVector}` : ""}\n  Fix: ${s.recommendation}`
+    )
+    .join("\n") || "None"
+}
 
 ${
   state.dialogueNotes && state.dialogueNotes.length > 0

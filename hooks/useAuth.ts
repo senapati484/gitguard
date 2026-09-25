@@ -14,6 +14,7 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
   GoogleAuthProvider,
+  GithubAuthProvider,
   type User,
 } from "firebase/auth";
 import { firebaseAuth } from "@/lib/firebase";
@@ -27,6 +28,8 @@ export interface AuthState {
   error: Error | null;
   /** Triggers a Google OAuth popup and exchanges the ID token for a session cookie. */
   signInWithGoogle: () => Promise<void>;
+  /** Triggers a GitHub OAuth popup and exchanges the ID token for a session cookie. */
+  signInWithGithub: () => Promise<void>;
   /** Signs out from Firebase and clears the server-side session cookie. */
   signOut: () => Promise<void>;
 }
@@ -74,6 +77,30 @@ export function useAuth(): AuthState {
     }
   }, []);
 
+  const signInWithGithub = useCallback(async () => {
+    setError(null);
+    try {
+      const provider = new GithubAuthProvider();
+      provider.addScope("read:user");
+      provider.addScope("user:email");
+      const result = await signInWithPopup(firebaseAuth, provider);
+
+      // Exchange the short-lived ID token for a long-lived session cookie
+      const idToken = await result.user.getIdToken();
+      const res = await fetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Session creation failed: ${res.status}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)));
+    }
+  }, []);
+
   const signOut = useCallback(async () => {
     try {
       await firebaseSignOut(firebaseAuth);
@@ -84,5 +111,5 @@ export function useAuth(): AuthState {
     }
   }, []);
 
-  return { user, loading, error, signInWithGoogle, signOut };
+  return { user, loading, error, signInWithGoogle, signInWithGithub, signOut };
 }

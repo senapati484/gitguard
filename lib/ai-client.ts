@@ -75,7 +75,7 @@ export async function generateAICompletion(
   // ── 1. Primary: Groq API ──────────────────────────────────────────────────
   const groqApiKey = process.env.GROQ_API_KEY;
   if (groqApiKey) {
-    const groqModel = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+    const groqModel = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
     try {
       console.log(`[ai-client] Calling Groq API (model: ${groqModel})...`);
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -119,7 +119,7 @@ export async function generateAICompletion(
   // ── 2. Fallback: Google Gemini API ────────────────────────────────────────
   const geminiApiKey = process.env.GEMINI_API_KEY;
   if (geminiApiKey) {
-    const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+    const geminiModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
     try {
       console.log(`[ai-client] Calling Google Gemini API (model: ${geminiModel})...`);
 
