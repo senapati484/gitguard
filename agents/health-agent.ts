@@ -178,7 +178,10 @@ export async function recordRunToFirestore(
       .catch(() => null);
 
     // Invalidate badge cache for this repo
-    const cacheKey = getCacheKey(record.installationId, record.repo);
+    const cacheKey = getCacheKey(
+      String(record.installationId ?? ""),
+      String(record.repo ?? "")
+    );
     badgeCache.delete(cacheKey);
 
     return docRef.id;

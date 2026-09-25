@@ -204,14 +204,22 @@ export async function detectBugsInHunks(
   if (hunks.length === 0) return [];
 
   // Group hunks by file to keep diff context coherent
-  const formattedHunks = hunks
+  const rawHunks = hunks
     .map(
       (h) =>
         `File: ${h.file}\nHunk: ${h.hunkHeader}\n\`\`\`diff\n${h.diffText}\n\`\`\``
     )
     .join("\n\n---\n\n");
 
-    const userPrompt = `Analyze the following changed code hunks for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${formattedHunks}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "confidence", "category", "message", "originalCode", "suggestedReplacement" }] }`;
+  // Safety cap at 24KB to prevent 413 / rate limit errors on giant multi-file diffs
+  const MAX_DIFF_CHARS = 24_000;
+  const formattedHunks =
+    rawHunks.length > MAX_DIFF_CHARS
+      ? rawHunks.slice(0, MAX_DIFF_CHARS) +
+        "\n\n[Notice: Large commit diff truncated to first 24KB of hunks for model context]"
+      : rawHunks;
+
+  const userPrompt = `Analyze the following changed code hunks for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${formattedHunks}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "confidence", "category", "message", "originalCode", "suggestedReplacement" }] }`;
 
   const rawCompletion = await generateAICompletion({
     messages: [
