@@ -22,7 +22,9 @@ const SESSION_COOKIE = "__session";
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth/session",
+  "/api/auth/callback",
   "/api/setup",
+  "/api/github/setup",
   "/api/webhooks",
 ];
 
@@ -45,7 +47,13 @@ export function middleware(req: NextRequest): NextResponse {
   // Cookie presence check only — Admin SDK verification happens server-side
   const hasSession = req.cookies.has(SESSION_COOKIE);
   if (!hasSession) {
-    const loginUrl = new URL("/login", req.url);
+    const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+    const baseOrigin =
+      configuredAppUrl && !configuredAppUrl.includes("localhost")
+        ? configuredAppUrl.replace(/\/$/, "")
+        : req.nextUrl.origin;
+
+    const loginUrl = new URL("/login", baseOrigin);
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
   }

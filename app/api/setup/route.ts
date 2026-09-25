@@ -22,7 +22,31 @@ import { getSessionUid } from "@/lib/auth-session";
  *   3. Writes / merges the uid into `installations/{id}.adminUids` in Firestore.
  *   4. Redirects to /dashboard.
  */
+function getBaseUrl(req: NextRequest): string {
+  const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (configuredAppUrl && !configuredAppUrl.includes("localhost")) {
+    return configuredAppUrl.replace(/\/$/, "");
+  }
+
+  const forwardedProto = req.headers.get("x-forwarded-proto") || "http";
+  const forwardedHost = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  if (forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+
+  return req.nextUrl.origin;
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const baseUrl = getBaseUrl(req);
+
+  // If the browser landed on localhost:3000 but we have a public domain (ngrok),
+  // immediately bounce to the public domain so session cookies and HTTPS are preserved.
+  if (req.nextUrl.origin.includes("localhost") && !baseUrl.includes("localhost")) {
+    const forwardUrl = new URL(req.nextUrl.pathname + req.nextUrl.search, baseUrl);
+    return NextResponse.redirect(forwardUrl);
+  }
+
   const { searchParams } = req.nextUrl;
 
   // ── 1. Parse required query params ─────────────────────────────────────────
@@ -31,16 +55,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   if (!rawId || isNaN(Number(rawId))) {
     console.warn("[setup] Missing or invalid installation_id query param");
-    return NextResponse.redirect(new URL("/dashboard", req.url));
+    return NextResponse.redirect(new URL("/dashboard", baseUrl));
   }
   const installationId = Number(rawId);
 
   // ── 2. Verify Firebase session cookie ──────────────────────────────────────
   const uid = await getSessionUid();
   if (!uid) {
-    // Not signed in — send to login, preserving the installation_id so we can
-    // re-run setup after the user authenticates.
-    const loginUrl = new URL("/login", req.url);
+    // Not signed in — send to login on baseUrl, preserving installation_id
+    const loginUrl = new URL("/login", baseUrl);
     loginUrl.searchParams.set("next", req.nextUrl.pathname + req.nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
@@ -74,5 +97,5 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   // ── 4. Redirect to dashboard ───────────────────────────────────────────────
-  return NextResponse.redirect(new URL("/dashboard", req.url));
+  return NextResponse.redirect(new URL("/dashboard", baseUrl));
 }
