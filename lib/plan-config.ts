@@ -142,6 +142,7 @@ export interface InstallationPlanInfo {
   id: string;
   installationId: number | string;
   accountLogin?: string;
+  primaryRepo?: string;
   plan: PlanTier;
   monthlyChecksCount: number;
   monthlyChecksLimit: number;

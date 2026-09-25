@@ -21,7 +21,7 @@ export async function getUserInstallationDocs(
     .get();
 
   if (!primarySnap.empty) {
-    return primarySnap.docs;
+    return primarySnap.docs.filter((d) => d.data().setupAction !== "deleted");
   }
 
   // 2. Fallback: If 0 installations linked, check for active unassigned installations
@@ -63,7 +63,7 @@ export async function getUserInstallationDocs(
       .limit(25)
       .get();
 
-    return updatedSnap.docs;
+    return updatedSnap.docs.filter((d) => d.data().setupAction !== "deleted");
   }
 
   return [];

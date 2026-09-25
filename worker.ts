@@ -21,6 +21,13 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
+import dns from "node:dns";
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // safe fallback
+}
+
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection } from "@/lib/redis";
 import {
@@ -251,13 +258,35 @@ async function processGitHubEvent(
     };
   }
 
-  // Increment monthly checks counter
-  await incrementInstallationCheckCount(installationId, quota.installationDocId);
-
-  // 5. Load Org-Wide Policy
+  // 5. Load Org-Wide Policy & Check Trigger Scope
   let policy: OrgPolicy | undefined = undefined;
   if (fetchedPolicy && (fetchedPolicy.enabled || quota.plan === "team")) {
     policy = fetchedPolicy;
+  }
+
+  // If this is an automated push event and scanOnPush is disabled, skip processing early
+  if (event === "push" && !pullNumber && fetchedPolicy && fetchedPolicy.scanOnPush === false) {
+    console.log(
+      `[worker] Auto-scan on Git Push is disabled in installation ${installationId} policy. Skipping push check for ${repo} @ ${sha.slice(0, 7)}.`
+    );
+    return {
+      repo,
+      sha,
+      event,
+      filesChanged,
+      files,
+      diffLength: diffContent.length,
+      decision: "PASS",
+      secretCount: 0,
+      bugCount: 0,
+      securityCount: 0,
+    };
+  }
+
+  // Increment monthly checks counter
+  await incrementInstallationCheckCount(installationId, quota.installationDocId);
+
+  if (policy) {
     console.log(
       `[worker] Active Policy for installation ${installationId}: ${
         policy.requiredAgents.length

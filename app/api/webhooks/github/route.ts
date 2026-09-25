@@ -106,6 +106,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           break;
         }
 
+        // Inspect installation policy: if scanOnPush is disabled, skip queueing to avoid noise
+        try {
+          const { getInstallationPolicy } = await import("@/lib/team-policy");
+          const policy = await getInstallationPolicy(p.installation.id);
+          if (policy && policy.scanOnPush === false) {
+            console.log(
+              `[webhook] Auto-scan on Git Push is disabled for installation ${p.installation.id}. Skipping push event for ${p.repository.full_name}.`
+            );
+            break;
+          }
+        } catch {
+          // non-fatal, fallback to worker
+        }
+
+        // Keep installation doc updated with active repository info
+        try {
+          const { adminDb } = await import("@/lib/firebase-admin");
+          await adminDb.collection("installations").doc(String(p.installation.id)).set({
+            primaryRepo: p.repository.full_name,
+            repo: p.repository.full_name,
+            repoName: p.repository.name,
+            owner: p.repository.owner.login,
+            accountLogin: p.repository.owner.login,
+            updatedAt: Date.now(),
+          }, { merge: true });
+        } catch {
+          // non-fatal
+        }
+
         const jobData: GitHubEventJobData = {
           installationId: p.installation.id,
           repo: p.repository.full_name,
@@ -133,6 +162,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         if (!p.installation?.id) {
           console.warn(`[webhook] pull_request event missing installation.id`);
           break;
+        }
+
+        // Keep installation doc updated with active repository info
+        try {
+          const { adminDb } = await import("@/lib/firebase-admin");
+          await adminDb.collection("installations").doc(String(p.installation.id)).set({
+            primaryRepo: p.repository.full_name,
+            repo: p.repository.full_name,
+            repoName: p.repository.name,
+            owner: p.repository.owner.login,
+            accountLogin: p.repository.owner.login,
+            updatedAt: Date.now(),
+          }, { merge: true });
+        } catch {
+          // non-fatal
         }
 
         const jobData: GitHubEventJobData = {
@@ -183,6 +227,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             .doc(`marketplace_${instObj.account.login.toLowerCase()}`)
             .get();
 
+          const repositories = (payload as { repositories?: Array<{ name: string; full_name: string }> })
+            .repositories;
+          const firstRepo = repositories?.[0]?.full_name;
+
           const updateFields: Record<string, unknown> = {
             installationId: instObj.id,
             accountLogin: instObj.account.login,
@@ -192,6 +240,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             updatedAt: Date.now(),
           };
 
+          if (firstRepo) {
+            updateFields.primaryRepo = firstRepo;
+            updateFields.repo = firstRepo;
+            updateFields.repoName = repositories?.[0]?.name;
+          }
+
           if (preDoc.exists && preDoc.data()?.marketplace) {
             updateFields.marketplace = preDoc.data()!.marketplace;
             updateFields.plan = preDoc.data()!.plan || "free";
@@ -200,7 +254,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           await installRef.set(updateFields, { merge: true });
           console.log(
-            `[webhook] Synchronized installation #${instObj.id} for account="${instObj.account.login}"`
+            `[webhook] Synchronized installation #${instObj.id} for account="${instObj.account.login}" (repo: ${firstRepo || "none"})`
+          );
+        }
+        break;
+      }
+
+      case "installation_repositories": {
+        const instObj = payload.installation as
+          | { id: number; account?: { login: string; id: number } }
+          | undefined;
+        const reposAdded = (payload as { repositories_added?: Array<{ id: number; name: string; full_name: string }> })
+          .repositories_added;
+
+        if (instObj?.id && reposAdded && reposAdded.length > 0) {
+          const { adminDb } = await import("@/lib/firebase-admin");
+          await adminDb.collection("installations").doc(String(instObj.id)).set({
+            primaryRepo: reposAdded[0].full_name,
+            repo: reposAdded[0].full_name,
+            repoName: reposAdded[0].name,
+            updatedAt: Date.now(),
+          }, { merge: true });
+          console.log(
+            `[webhook] Updated repository for installation #${instObj.id}: ${reposAdded[0].full_name}`
           );
         }
         break;

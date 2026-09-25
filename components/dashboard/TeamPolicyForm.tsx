@@ -88,6 +88,39 @@ export function TeamPolicyForm({
     text: string;
   } | null>(null);
 
+  // Manual one-off scan state
+  const [triggerBranch, setTriggerBranch] = useState("main");
+  const [triggeringScan, setTriggeringScan] = useState(false);
+  const [triggerResult, setTriggerResult] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  async function handleTriggerManualScan() {
+    setTriggeringScan(true);
+    setTriggerResult(null);
+    try {
+      const res = await fetch(`/api/installations/${selectedInstId}/scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch: triggerBranch }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to queue manual scan");
+      }
+      setTriggerResult({
+        type: "success",
+        text: `✓ Review scan successfully queued for ${data.repo} @ ${data.branch} (${data.sha.slice(0, 7)})!`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setTriggerResult({ type: "error", text: msg });
+    } finally {
+      setTriggeringScan(false);
+    }
+  }
+
   // Fetch policy for selected installation
   const fetchPolicy = useCallback(async (instId: string) => {
     if (!instId) return;
@@ -185,7 +218,7 @@ export function TeamPolicyForm({
             >
               {installations.map((inst) => (
                 <option key={inst.installationId} value={String(inst.installationId)}>
-                  {inst.accountLogin || `Installation #${inst.installationId}`}
+                  {inst.primaryRepo || (inst.accountLogin ? `${inst.accountLogin}/gitguard` : `Installation #${inst.installationId}`)} (ID: {inst.installationId})
                 </option>
               ))}
             </select>
@@ -193,7 +226,7 @@ export function TeamPolicyForm({
         ) : (
           <div className="flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-700">
             <span className="font-semibold font-sans text-slate-900">Repo:</span>
-            <span>{currentInst?.accountLogin || `Installation #${selectedInstId}`}</span>
+            <span>{currentInst?.primaryRepo || (currentInst?.accountLogin ? `${currentInst.accountLogin}/gitguard` : `Installation #${selectedInstId}`)}</span>
           </div>
         )}
       </div>
@@ -220,7 +253,115 @@ export function TeamPolicyForm({
         </div>
       )}
 
-      {/* Card 1: Org-Wide Policy Enforcement Toggle */}
+      {/* Card 0: Trigger Scope & One-Off Manual Scan */}
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2.5">
+              <span className="text-lg">⚙️</span>
+              <h2 className="text-base font-semibold text-slate-950">
+                Trigger Scope &amp; Automated Checks
+              </h2>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed max-w-2xl">
+              Configure when GitGuard automatically analyzes code. You can disable automatic checks on raw <code>git push</code> commits to prevent interrupting your local development, and trigger manual one-off scans anytime.
+            </p>
+          </div>
+        </div>
+
+        {/* Push Toggle */}
+        <div className="flex items-center justify-between p-4 rounded-lg bg-slate-50 border border-slate-200">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-slate-900">Auto-scan on Git Push</span>
+              <span
+                className={`text-[10px] font-mono px-2 py-0.5 rounded font-semibold border ${
+                  policy.scanOnPush
+                    ? "bg-emerald-100 border-emerald-300 text-emerald-800"
+                    : "bg-slate-200 border-slate-300 text-slate-700"
+                }`}
+              >
+                {policy.scanOnPush ? "ENABLED" : "DISABLED (PRs Only)"}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              When disabled, GitGuard skips checks on every local <code>git push</code>. Pull requests remain protected.
+            </p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              checked={Boolean(policy.scanOnPush)}
+              onChange={(e) =>
+                setPolicy((prev) => ({ ...prev, scanOnPush: e.target.checked }))
+              }
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-slate-900"></div>
+          </label>
+        </div>
+
+        {/* Manual One-Off Trigger */}
+        <div className="pt-3 border-t border-slate-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-xs font-semibold text-slate-900 uppercase tracking-wider">
+                Run One-Off Review Scan
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Trigger an on-demand review check for any branch without making a pull request.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white shadow-sm">
+                <span className="text-[11px] text-slate-500 font-mono">branch:</span>
+                <input
+                  type="text"
+                  value={triggerBranch}
+                  onChange={(e) => setTriggerBranch(e.target.value)}
+                  placeholder="main"
+                  className="text-xs font-mono text-slate-900 w-24 focus:outline-none bg-transparent"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleTriggerManualScan}
+                disabled={triggeringScan}
+                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-colors disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+              >
+                {triggeringScan ? (
+                  <>
+                    <span className="animate-spin text-xs">⏳</span> Queuing...
+                  </>
+                ) : (
+                  <>
+                    <span>▶</span> Trigger Scan
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {triggerResult && (
+            <div
+              className={`mt-3 p-3 rounded-lg text-xs font-medium border flex items-center justify-between ${
+                triggerResult.type === "success"
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  : "bg-rose-50 border-rose-200 text-rose-800"
+              }`}
+            >
+              <span>{triggerResult.text}</span>
+              <button
+                type="button"
+                onClick={() => setTriggerResult(null)}
+                className="opacity-60 hover:opacity-100 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>

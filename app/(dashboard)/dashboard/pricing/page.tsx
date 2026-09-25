@@ -27,22 +27,29 @@ export default async function PricingPage() {
   // 1. Fetch user's installations
   const installationDocs = await getUserInstallationDocs(uid);
 
-  const rawInstallations = installationDocs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as {
+  const rawInstallations = installationDocs.map((doc) => {
+    const data = doc.data() as {
       installationId: number | string;
       accountLogin?: string;
-    }),
-  }));
+      primaryRepo?: string;
+      repo?: string;
+    };
+    return {
+      id: doc.id,
+      ...data,
+    };
+  });
 
   // 2. Map installation quotas & plan info
   const installations: InstallationPlanInfo[] = await Promise.all(
     rawInstallations.map(async (inst) => {
       const quota = await checkInstallationQuota(inst.installationId);
+      const primaryRepo = inst.primaryRepo || inst.repo || (inst.accountLogin ? `${inst.accountLogin}/gitguard` : undefined);
       return {
         id: inst.id,
         installationId: inst.installationId,
         accountLogin: inst.accountLogin || `Installation #${inst.installationId}`,
+        primaryRepo,
         plan: quota.plan,
         monthlyChecksCount: quota.currentCount,
         monthlyChecksLimit: quota.monthlyLimit === Infinity ? 999999 : quota.monthlyLimit,

@@ -5,10 +5,15 @@
  *
  * Provider Strategy:
  *   1. Primary: Groq API (ultra-fast inference via llama-3.3-70b-versatile or llama-3.1-8b-instant).
- *   2. Fallback: Google Gemini API (gemini-1.5-flash or gemini-2.0-flash).
- *
  * Zero third-party SDK dependencies (uses native fetch).
  */
+
+import dns from "node:dns";
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // safe fallback in environments where dns is not configurable
+}
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";

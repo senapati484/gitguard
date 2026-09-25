@@ -35,6 +35,7 @@ export interface SeverityThresholds {
 
 export interface OrgPolicy {
   enabled: boolean;
+  scanOnPush?: boolean; // When false, GitGuard only scans Pull Requests and manual triggers, skipping raw git push commits
   requiredAgents: RequiredAgentName[];
   severityThresholds: SeverityThresholds;
   customSecretPatterns: CustomSecretPattern[];
@@ -59,6 +60,7 @@ export const ALL_AGENT_NAMES: RequiredAgentName[] = [
 
 export const DEFAULT_ORG_POLICY: OrgPolicy = {
   enabled: true,
+  scanOnPush: false, // Default to PRs only, preventing noisy push blocks and quota burn
   debateMode: true,
   maxDebateRounds: 2,
   requiredAgents: ["SecretAgent", "BugAgent", "SecurityAgent", "CommitAgent", "HealthAgent"],

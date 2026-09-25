@@ -216,21 +216,23 @@ export async function runGitleaksScan(
       }
     }
 
-    // 3. Map patch file lines back to actual repository file paths and real line numbers
+    // 3. Map patch file lines back to actual repository file paths and real line numbers.
+    // Discard any finding that does not map to an added (+) line, since deleted (-) lines
+    // or diff headers must never be treated as newly introduced credentials.
     const diffLineMap = buildDiffLineMap(diff);
 
-    let mappedFindings: GitleaksFinding[] = allRawFindings.map((f) => {
+    const mappedFindings: GitleaksFinding[] = [];
+    for (const f of allRawFindings) {
       const mapped = diffLineMap.get(f.StartLine);
       if (mapped && mapped.filePath) {
-        return {
+        mappedFindings.push({
           ...f,
           File: mapped.filePath,
           StartLine: mapped.targetLine,
           EndLine: mapped.targetLine,
-        };
+        });
       }
-      return f;
-    });
+    }
 
     // 4. Direct defense-in-depth: regex scan against added diff lines for custom patterns
     if (activeCustom.length > 0) {

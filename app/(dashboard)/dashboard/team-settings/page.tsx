@@ -29,22 +29,50 @@ export default async function TeamSettingsPage() {
   // Fetch user's installations from Firestore
   const installationDocs = await getUserInstallationDocs(uid);
 
-  const rawInstallations = installationDocs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as {
+  const rawInstallations = installationDocs.map((doc) => {
+    const data = doc.data() as {
       installationId: number | string;
       accountLogin?: string;
-    }),
-  }));
+      primaryRepo?: string;
+      repo?: string;
+    };
+    return {
+      id: doc.id,
+      ...data,
+    };
+  });
 
   // Fetch plan & quota info for each installation
   const installations: InstallationPlanInfo[] = await Promise.all(
     rawInstallations.map(async (inst) => {
       const quota = await checkInstallationQuota(inst.installationId);
+
+      // Resolve primary repository name from installation doc or runs or fallback
+      let primaryRepo: string | undefined = inst.primaryRepo || inst.repo;
+      if (!primaryRepo) {
+        try {
+          const { adminDb } = await import("@/lib/firebase-admin");
+          const runsSnap = await adminDb
+            .collection("runs")
+            .where("installationId", "in", [String(inst.installationId), Number(inst.installationId)])
+            .limit(1)
+            .get();
+          if (!runsSnap.empty) {
+            primaryRepo = runsSnap.docs[0].data().repo;
+          }
+        } catch {
+          // non-fatal
+        }
+      }
+      if (!primaryRepo && inst.accountLogin) {
+        primaryRepo = `${inst.accountLogin}/gitguard`;
+      }
+
       return {
         id: inst.id,
         installationId: inst.installationId,
         accountLogin: inst.accountLogin || `Installation #${inst.installationId}`,
+        primaryRepo,
         plan: quota.plan,
         monthlyChecksCount: quota.currentCount,
         monthlyChecksLimit: quota.monthlyLimit === Infinity ? 999999 : quota.monthlyLimit,

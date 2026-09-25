@@ -184,6 +184,24 @@ export async function recordRunToFirestore(
       .set(record, { merge: true })
       .catch(() => null);
 
+    // Update parent installation doc with primaryRepo so dashboard always has the actual repository name
+    if (record.repo && record.installationId) {
+      await adminDb
+        .collection("installations")
+        .doc(String(record.installationId))
+        .set(
+          {
+            primaryRepo: record.repo,
+            repo: record.repo,
+            repoName: record.repoName || String(record.repo).split("/")[1] || record.repo,
+            owner: record.owner || String(record.repo).split("/")[0] || "",
+            updatedAt: Date.now(),
+          },
+          { merge: true }
+        )
+        .catch(() => null);
+    }
+
     // Invalidate badge cache for this repo
     const cacheKey = getCacheKey(
       String(record.installationId ?? ""),

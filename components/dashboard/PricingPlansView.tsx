@@ -78,7 +78,7 @@ export function PricingPlansView({
       );
 
       setActionMessage(
-        `✅ Successfully switched ${currentInst.accountLogin || `Installation #${currentInst.installationId}`} to ${targetPlan.toUpperCase()} plan (Demo Mode)!`
+        `✅ Successfully switched ${currentInst.primaryRepo || currentInst.accountLogin || `Installation #${currentInst.installationId}`} to ${targetPlan.toUpperCase()} plan (Demo Mode)!`
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -129,7 +129,7 @@ export function PricingPlansView({
             >
               {installationsState.map((inst) => (
                 <option key={inst.id} value={String(inst.installationId)}>
-                  {inst.accountLogin || `Installation #${inst.installationId}`} ({inst.plan.toUpperCase()})
+                  {inst.primaryRepo || inst.accountLogin || `Installation #${inst.installationId}`} ({inst.plan.toUpperCase()})
                 </option>
               ))}
             </select>

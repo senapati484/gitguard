@@ -17,6 +17,7 @@ interface InstallationWithStats {
   id: string;
   installationId: number | string;
   accountLogin?: string;
+  primaryRepo?: string;
   setupAction?: string;
   plan: PlanTier;
   billingProvider?: BillingProvider;
@@ -44,16 +45,21 @@ export default async function DashboardPage() {
   // 1. Fetch user's installations (with auto-claim for active GitHub installations)
   const installationDocs = await getUserInstallationDocs(uid);
 
-  const rawInstallations = installationDocs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as {
+  const rawInstallations = installationDocs.map((doc) => {
+    const data = doc.data() as {
       installationId: number | string;
       accountLogin?: string;
       setupAction?: string;
       plan?: PlanTier;
       billingProvider?: BillingProvider;
-    }),
-  }));
+      primaryRepo?: string;
+      repo?: string;
+    };
+    return {
+      id: doc.id,
+      ...data,
+    };
+  });
 
   // 2. Fetch runs and compute health scores per installation
   const installations: InstallationWithStats[] = await Promise.all(
@@ -101,10 +107,20 @@ export default async function DashboardPage() {
         // non-fatal
       }
 
+      // Extract active repositories from installation doc or runs or fallback
+      const activeRepos = Array.from(
+        new Set(runs.map((r) => r.repo).filter((r): r is string => Boolean(r && r.trim())))
+      );
+      let primaryRepo = inst.primaryRepo || inst.repo || activeRepos[0];
+      if (!primaryRepo && inst.accountLogin) {
+        primaryRepo = `${inst.accountLogin}/gitguard`;
+      }
+
       return {
         id: inst.id,
         installationId: inst.installationId,
         accountLogin: inst.accountLogin || `Installation #${inst.installationId}`,
+        primaryRepo,
         setupAction: inst.setupAction || "active",
         plan: (inst.plan as PlanTier) || "free",
         billingProvider: inst.billingProvider,
@@ -120,6 +136,15 @@ export default async function DashboardPage() {
     })
   );
 
+  // Filter out duplicate dead installations (e.g. 0 runs) if an active installation exists for the same account
+  const activeInstallations = installations.filter((inst) => {
+    if (inst.totalRuns > 0) return true;
+    const hasActiveSibling = installations.some(
+      (other) => other.installationId !== inst.installationId && other.accountLogin === inst.accountLogin && other.totalRuns > 0
+    );
+    return !hasActiveSibling;
+  });
+
   // 3. Fetch global recent whitelisted findings for the audit summary
   const recentIgnoredAudits: IgnoredAuditRecord[] = await getIgnoredAuditRecords(
     undefined,
@@ -128,15 +153,15 @@ export default async function DashboardPage() {
   );
 
   // Calculate overall metrics
-  const totalInstallations = installations.length;
+  const totalInstallations = activeInstallations.length;
   const avgHealthScore =
     totalInstallations > 0
       ? Math.round(
-          installations.reduce((acc, curr) => acc + curr.healthScore, 0) / totalInstallations
+          activeInstallations.reduce((acc, curr) => acc + curr.healthScore, 0) / totalInstallations
         )
       : 100;
-  const totalRunsAnalyzed = installations.reduce((acc, curr) => acc + curr.totalRuns, 0);
-  const totalWhitelisted = installations.reduce((acc, curr) => acc + curr.whitelistedCount, 0);
+  const totalRunsAnalyzed = activeInstallations.reduce((acc, curr) => acc + curr.totalRuns, 0);
+  const totalWhitelisted = activeInstallations.reduce((acc, curr) => acc + curr.whitelistedCount, 0);
 
   return (
     <div className="space-y-8">
@@ -230,11 +255,11 @@ export default async function DashboardPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold text-slate-950">Repositories &amp; Installations</h2>
           <span className="text-xs text-slate-500 font-mono">
-            {installations.length} installation(s) connected
+            {activeInstallations.length} installation(s) connected
           </span>
         </div>
 
-        {installations.length === 0 ? (
+        {activeInstallations.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-sm">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-900 mb-4">
               <svg className="h-6 w-6" width={24} height={24} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -256,7 +281,7 @@ export default async function DashboardPage() {
           </div>
         ) : (
           <div className="space-y-6">
-            {installations.map((inst) => (
+            {activeInstallations.map((inst) => (
               <div
                 key={inst.id}
                 className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm hover:border-slate-300 transition-colors"
@@ -272,12 +297,19 @@ export default async function DashboardPage() {
                     <div>
                       <div className="flex items-center gap-2.5 flex-wrap">
                         <a
-                          href={`https://github.com/${inst.accountLogin}`}
+                          href={`https://github.com/${inst.primaryRepo || inst.accountLogin}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="font-bold text-slate-950 text-base hover:text-slate-700 transition-colors flex items-center gap-1.5"
                         >
-                          <span>{inst.accountLogin}</span>
+                          {inst.primaryRepo ? (
+                            <>
+                              <span className="text-slate-500 font-medium">{inst.primaryRepo.split("/")[0]} /</span>
+                              <span className="text-slate-950 font-bold">{inst.primaryRepo.split("/")[1]}</span>
+                            </>
+                          ) : (
+                            <span>{inst.accountLogin}</span>
+                          )}
                           <svg className="w-3.5 h-3.5 opacity-50" width={14} height={14} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                           </svg>
@@ -355,6 +387,7 @@ export default async function DashboardPage() {
                         <thead>
                           <tr className="border-b border-slate-200 text-slate-500">
                             <th className="pb-2.5 font-semibold">Verdict</th>
+                            <th className="pb-2.5 font-semibold">Repository</th>
                             <th className="pb-2.5 font-semibold">Event / Target</th>
                             <th className="pb-2.5 font-semibold">Commit SHA</th>
                             <th className="pb-2.5 font-semibold">Agent Breakdown</th>
@@ -379,6 +412,8 @@ export default async function DashboardPage() {
                               minute: "2-digit",
                             });
 
+                            const targetRepo = run.repo || inst.primaryRepo || "senapati484/gitguard";
+
                             return (
                               <tr key={run.id || run.sha} className="hover:bg-slate-50/70 transition-colors">
                                 <td className="py-3">
@@ -389,23 +424,47 @@ export default async function DashboardPage() {
                                   </span>
                                 </td>
 
+                                <td className="py-3 font-mono font-medium text-slate-900">
+                                  <a
+                                    href={`https://github.com/${targetRepo}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="hover:underline flex items-center gap-1.5 text-xs text-slate-900 font-semibold"
+                                  >
+                                    <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="currentColor" viewBox="0 0 16 16">
+                                      <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.6-1.2-1.6 1.2a.25.25 0 0 1-.4-.2Z" />
+                                    </svg>
+                                    <span>{targetRepo}</span>
+                                  </a>
+                                </td>
+
                                 <td className="py-3 font-semibold text-slate-900">
                                   {run.pullNumber ? (
-                                    <span className="flex items-center gap-1.5">
+                                    <a
+                                      href={`https://github.com/${targetRepo}/pull/${run.pullNumber}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="flex items-center gap-1.5 hover:underline text-slate-900"
+                                    >
                                       <svg className="h-3.5 w-3.5 text-slate-700" width={14} height={14} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                                       </svg>
                                       PR #{run.pullNumber}
-                                    </span>
+                                    </a>
                                   ) : (
-                                    <span className="text-slate-600 font-normal">Push event</span>
+                                    <span className="text-slate-700 font-medium flex items-center gap-1">
+                                      <svg className="h-3.5 w-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                                      </svg>
+                                      Push to {targetRepo.split("/")[1] || targetRepo}
+                                    </span>
                                   )}
                                 </td>
 
                                 <td className="py-3 font-mono text-slate-500">
                                   {run.sha ? (
                                     <a
-                                      href={`https://github.com/${inst.accountLogin}/commit/${run.sha}`}
+                                      href={`https://github.com/${targetRepo}/commit/${run.sha}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="hover:text-slate-900 hover:underline"

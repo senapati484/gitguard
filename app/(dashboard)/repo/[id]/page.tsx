@@ -36,6 +36,10 @@ export async function generateMetadata({ params }: RepoPageProps): Promise<Metad
 interface InstallationRecord {
   installationId: number | string;
   accountLogin?: string;
+  primaryRepo?: string;
+  repo?: string;
+  repoName?: string;
+  owner?: string;
   adminUids?: string[];
   setupAction?: string;
 }
@@ -73,10 +77,6 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
     redirect("/dashboard");
   }
 
-  const repoTitle = installationData?.accountLogin
-    ? `${installationData.accountLogin}`
-    : `Installation #${id}`;
-
   // 2. Fetch runs for this installation
   let runs: RepoRunRecord[] = [];
 
@@ -97,6 +97,13 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
   } catch (err) {
     console.warn(`[repo-page] Error querying runs for repo ${id}:`, err);
   }
+
+  const primaryRepo =
+    installationData?.primaryRepo ||
+    installationData?.repo ||
+    runs.find((r) => r.repo)?.repo ||
+    (installationData?.accountLogin ? `${installationData.accountLogin}/gitguard` : `Installation #${id}`);
+  const repoTitle = primaryRepo;
 
   // Sort chronological for Recharts trend line
   runs.sort((a, b) => a.createdAt - b.createdAt);
@@ -164,7 +171,17 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between border-b border-border pb-6">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">{repoTitle}</h1>
+            <a
+              href={`https://github.com/${repoTitle}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-2xl font-bold tracking-tight text-foreground hover:underline flex items-center gap-2"
+            >
+              <span>{repoTitle}</span>
+              <svg className="w-4 h-4 opacity-50" width={16} height={16} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </a>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono bg-primary/10 text-primary border border-primary/20">
               Installation #{id}
             </span>
@@ -419,7 +436,18 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
                         </td>
 
                         <td className="py-3 px-6 font-mono text-muted-foreground">
-                          {run.sha ? run.sha.slice(0, 7) : "—"}
+                          {run.sha ? (
+                            <a
+                              href={`https://github.com/${run.repo || repoTitle}/commit/${run.sha}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="hover:underline hover:text-foreground"
+                            >
+                              {run.sha.slice(0, 7)}
+                            </a>
+                          ) : (
+                            "—"
+                          )}
                         </td>
 
                         <td className="py-3 px-6">

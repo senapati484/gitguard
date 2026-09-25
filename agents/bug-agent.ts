@@ -208,29 +208,34 @@ export async function detectBugsInHunks(
 ): Promise<BugFinding[]> {
   if (hunks.length === 0) return [];
 
-  // Partition hunks into batches sized appropriately for model inference
-  const batches = batchHunksForInference(hunks as CompressedHunk[], 18_000);
+  // Partition hunks into batches sized appropriately for model inference (capped at 6,000 chars)
+  const batches = batchHunksForInference(hunks as CompressedHunk[], 6_000).slice(0, 4);
   console.log(
     `[bug-agent] Compressed and batched into ${batches.length} slice(s) for AI bug analysis (${hunks.length} hunk(s)).`
   );
 
-  const batchResults = await Promise.all(
-    batches.map(async (batch) => {
-      const userPrompt = `Analyze the following changed code hunks (Batch ${batch.batchIndex}/${batch.totalBatches}) for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${batch.promptContext}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "confidence", "category", "message", "originalCode", "suggestedReplacement" }] }`;
+  const batchResults: BugFinding[][] = [];
+  for (const batch of batches) {
+    const userPrompt = `Analyze the following changed code hunks (Batch ${batch.batchIndex}/${batch.totalBatches}) for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${batch.promptContext}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "confidence", "category", "message", "originalCode", "suggestedReplacement" }] }`;
 
-      const rawCompletion = await generateAICompletion({
-        messages: [
-          { role: "system", content: BUG_ANALYSIS_SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.1,
-        jsonMode: true,
-      });
+    const rawCompletion = await generateAICompletion({
+      messages: [
+        { role: "system", content: BUG_ANALYSIS_SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.1,
+      jsonMode: true,
+    });
 
-      if (!rawCompletion) return [];
-      return parseBugFindings(rawCompletion);
-    })
-  );
+    if (rawCompletion) {
+      batchResults.push(parseBugFindings(rawCompletion));
+    }
+
+    // Gentle pacing between batches if multiple batches exist
+    if (batches.length > 1 && batch.batchIndex < batch.totalBatches) {
+      await new Promise((r) => setTimeout(r, 600));
+    }
+  }
 
   // Flatten and deduplicate findings across batches
   const allBugs = batchResults.flat();

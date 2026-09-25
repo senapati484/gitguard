@@ -114,7 +114,14 @@ export function extractCompressedHunks(diff: string): CompressedHunk[] {
 
   function flushCurrentHunk() {
     if (currentFile && isEligibleFile(currentFile) && currentHunkLines.length > 0 && addedLinesCount > 0) {
-      const compressedText = compressHunkDiff(currentHunkLines);
+      let compressedText = compressHunkDiff(currentHunkLines);
+      // Hard cap individual hunk diff to 5,000 characters (~1,250 tokens)
+      // to guarantee single hunks never blow Groq TPM rate limits or throw 413
+      if (compressedText.length > 5_000) {
+        compressedText =
+          compressedText.slice(0, 4_800) +
+          "\n\n[...remaining hunk lines truncated for token limit...]";
+      }
       hunks.push({
         file: currentFile,
         startLine: hunkStartLine,
@@ -171,7 +178,7 @@ export function extractCompressedHunks(diff: string): CompressedHunk[] {
  */
 export function batchHunksForInference(
   hunks: CompressedHunk[],
-  maxBatchChars = 8_000
+  maxBatchChars = 6_000
 ): HunkBatch[] {
   if (hunks.length === 0) return [];
 
