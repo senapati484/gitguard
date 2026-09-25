@@ -26,7 +26,7 @@ export interface RepoRunRecord {
   repoName?: string;
   sha?: string;
   event?: string;
-  pullNumber?: number;
+  pullNumber?: number | null;
   decision: "PASS" | "WARN" | "BLOCK";
   secretCount?: number;
   criticalCount?: number;

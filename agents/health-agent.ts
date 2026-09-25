@@ -149,6 +149,19 @@ export async function recordRunToFirestore(
   runData: Omit<RepoRunRecord, "id" | "createdAt"> & { createdAt?: number }
 ): Promise<string> {
   try {
+    const sanitize = (val: unknown): unknown => {
+      if (val === undefined) return null;
+      if (val === null || typeof val !== "object") return val;
+      if (Array.isArray(val)) return val.map(sanitize);
+      const res: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        if (v !== undefined) {
+          res[k] = sanitize(v);
+        }
+      }
+      return res;
+    };
+
     const rawRecord: Record<string, unknown> = {
       ...runData,
       installationId: String(runData.installationId),
@@ -156,13 +169,7 @@ export async function recordRunToFirestore(
       createdAt: runData.createdAt || Date.now(),
     };
 
-    // Strip any keys with undefined values to guarantee clean Firestore insertion
-    const record: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(rawRecord)) {
-      if (value !== undefined) {
-        record[key] = value;
-      }
-    }
+    const record = sanitize(rawRecord) as Record<string, unknown>;
 
     // Save to top-level "runs"
     const docRef = await adminDb.collection("runs").add(record);

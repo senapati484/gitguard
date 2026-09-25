@@ -324,7 +324,7 @@ async function processGitHubEvent(
     repoName: repoShortName,
     sha,
     event,
-    pullNumber,
+    pullNumber: pullNumber ?? null,
     decision: graphResult.decision,
     secretCount: confirmedSecrets.length,
     criticalCount,
@@ -332,7 +332,7 @@ async function processGitHubEvent(
     mediumCount,
     lowCount,
     dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,
-    seoScore: graphResult.seoScore,
+    seoScore: graphResult.seoScore ?? 100,
     seoDefectCount: (graphResult.seoFindings || []).length,
   }).catch((err) => {
     console.warn(`[worker] Failed to record run to Firestore:`, err);

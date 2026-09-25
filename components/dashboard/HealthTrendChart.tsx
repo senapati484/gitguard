@@ -25,7 +25,7 @@ export interface HealthTrendPoint {
   score: number;
   verdict: "PASS" | "WARN" | "BLOCK";
   sha?: string;
-  pullNumber?: number;
+  pullNumber?: number | null;
   secrets?: number;
   bugs?: number;
   security?: number;
