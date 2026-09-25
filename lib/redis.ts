@@ -1,51 +1,51 @@
 /**
  * lib/redis.ts
  *
- * Upstash Redis client — used for rate limiting, caching, and job queues.
+ * ioredis connection singleton — shared by the BullMQ Queue (enqueue side in
+ * Next.js route handlers) and the Worker (separate Railway process).
  *
- * Install: npm install @upstash/redis
- */
-
-// import { Redis } from "@upstash/redis";
-
-/**
- * Returns a singleton Upstash Redis client.
- * Uses REST-based HTTP calls (works in Edge Runtime and Node.js).
+ * Upstash Redis requires:
+ *   UPSTASH_REDIS_URL=rediss://default:<token>@<host>:<port>
  *
- * @example
- * const redis = getRedis();
- * await redis.set("key", "value", { ex: 60 });
- * const val = await redis.get<string>("key");
+ * BullMQ requires:
+ *   - maxRetriesPerRequest: null  (lets BullMQ manage retries itself)
+ *   - enableOfflineQueue: false   (fail fast if Redis is unreachable at boot)
  */
-export function getRedis() {
+import IORedis from "ioredis";
+
+function buildConnection(): IORedis {
   const url = process.env.UPSTASH_REDIS_URL;
-  const token = process.env.UPSTASH_REDIS_TOKEN;
-
-  if (!url || !token) {
+  if (!url) {
     throw new Error(
-      "Missing required env vars: UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN"
+      "[redis] UPSTASH_REDIS_URL is not set. " +
+        "Copy it from your Upstash console → Redis → REST API → ioredis URL."
     );
   }
 
-  // TODO: Uncomment after installing @upstash/redis
-  // return new Redis({ url, token });
-
-  return { url }; // placeholder
+  return new IORedis(url, {
+    // Required by BullMQ — it handles its own retry logic per job
+    maxRetriesPerRequest: null,
+    // Don't queue commands when Redis is down; surface errors immediately
+    enableOfflineQueue: false,
+    // Batch commands automatically to reduce RTT on Upstash
+    enableAutoPipelining: true,
+    // Upstash uses TLS (rediss://); set rejectUnauthorized: false for dev
+    tls: url.startsWith("rediss://") ? { rejectUnauthorized: false } : undefined,
+    // Exponential back-off, cap at 10 s, give up after 10 attempts
+    retryStrategy(times) {
+      if (times > 10) return null; // stop retrying → emit error event
+      return Math.min(times * 200, 10_000);
+    },
+  });
 }
 
-/**
- * Simple rate-limiter helper using Redis INCR + EXPIRE.
- * Returns true if the request is within the limit, false if exceeded.
- *
- * @param key     - Unique key for the rate limit bucket (e.g., `rate:ip:${ip}`)
- * @param limit   - Max requests allowed per window
- * @param windowS - Window duration in seconds
- */
-export async function checkRateLimit(
-  _key: string,
-  _limit: number,
-  _windowS: number
-): Promise<boolean> {
-  // TODO: implement with getRedis() once SDK is installed
-  throw new Error("TODO: implement checkRateLimit — install @upstash/redis first");
+// Module-level singleton so a single connection is reused across hot-reloads
+// in dev and across handler invocations in the same worker process.
+let _connection: IORedis | null = null;
+
+export function getRedisConnection(): IORedis {
+  if (!_connection) {
+    _connection = buildConnection();
+  }
+  return _connection;
 }

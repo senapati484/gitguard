@@ -211,15 +211,21 @@ Once everything is running, install the GitHub App on a test repository. Then tr
 
 ---
 
-## Deployment
+## Deployment (Railway / Vercel)
 
-1. Deploy to [Vercel](https://vercel.com) (recommended):
-   ```bash
-   npx vercel
-   ```
-2. Set all environment variables in the Vercel project dashboard.
-3. Update the GitHub App **Webhook URL** to your production domain.
-4. Update `NEXT_PUBLIC_APP_URL` to the production URL.
+### Architecture
+- **Web App (Vercel or Railway)**: Serves Next.js App Router, Dashboard, and Webhook Receiver at `/api/webhooks/github`. On `push` or `pull_request`, it validates signatures and enqueues `{ installationId, repo, sha, diffUrl }` into the `github-events` BullMQ queue.
+- **Worker (Railway Service)**: Runs the BullMQ consumer via `worker.ts`. It pulls jobs off the queue, acquires the installation Octokit client, and fetches the diff via compare or PR-files API.
+
+### 1. Web Service (Next.js)
+- Build command: `npm run build`
+- Start command: `npm run start`
+
+### 2. Worker Service (Railway)
+Create an additional service in your Railway project connected to the same repository:
+- Build command: `npm run build` (or leave default)
+- Start command: `npm run worker`
+- Set the same environment variables (including `UPSTASH_REDIS_URL`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`).
 
 ---
 
