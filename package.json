@@ -33,7 +33,7 @@
     "@octokit/app": "^15.1.6",
     "@octokit/rest": "^21.1.1",
     "@upstash/redis": "^1.34.0",
-    "firebase": "^11.0.0",
-    "firebase-admin": "^13.0.0"
+    "firebase": "^11.10.0",
+    "firebase-admin": "^13.10.0"
   }
 }
