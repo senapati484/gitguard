@@ -22,8 +22,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const sessionCookie = await createSessionCookie(idToken);
 
+    const isHttps =
+      req.headers.get("x-forwarded-proto") === "https" ||
+      req.nextUrl.protocol === "https:" ||
+      Boolean(
+        process.env.NEXT_PUBLIC_APP_URL &&
+          process.env.NEXT_PUBLIC_APP_URL.startsWith("https://")
+      );
+
     const res = NextResponse.json({ ok: true }, { status: 200 });
-    res.headers.set("Set-Cookie", buildSessionCookieHeader(sessionCookie));
+    res.headers.set("Set-Cookie", buildSessionCookieHeader(sessionCookie, isHttps));
     return res;
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

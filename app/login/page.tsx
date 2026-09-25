@@ -14,10 +14,16 @@ export const metadata: Metadata = {
   description: "Sign in to GitGuard with your Google account.",
 };
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams?: { next?: string };
+}) {
+  const nextTarget = searchParams?.next || "/dashboard";
+
   // Already authenticated → skip the login screen
   const uid = await getSessionUid();
-  if (uid) redirect("/dashboard");
+  if (uid) redirect(nextTarget);
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-background p-6">
@@ -55,7 +61,7 @@ export default async function LoginPage() {
           <p className="text-center text-sm text-muted-foreground">
             Sign in to manage your installations and view security reports.
           </p>
-          <GoogleSignInButton redirectTo="/dashboard" className="w-full justify-center" />
+          <GoogleSignInButton redirectTo={nextTarget} className="w-full justify-center" />
         </div>
 
         <p className="text-center text-xs text-muted-foreground">

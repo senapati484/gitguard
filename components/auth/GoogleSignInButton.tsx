@@ -6,6 +6,7 @@
  * A button that triggers Google OAuth via the useAuth hook.
  * Handles loading state, error display, and post-sign-in redirect.
  */
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -19,22 +20,36 @@ export function GoogleSignInButton({
   redirectTo = "/dashboard",
   className = "",
 }: GoogleSignInButtonProps) {
-  const { signInWithGoogle, loading, error } = useAuth();
-  const router = useRouter();
+  const { signInWithGoogle, signInWithAdminToken, signingIn, error } = useAuth();
+  const [activeAction, setActiveAction] = useState<"google" | "admin" | null>(null);
 
-  async function handleClick() {
-    await signInWithGoogle();
-    // Only redirect if no error was set
-    router.push(redirectTo);
+  async function handleGoogleClick() {
+    setActiveAction("google");
+    const success = await signInWithGoogle();
+    setActiveAction(null);
+    if (success) {
+      window.location.href = redirectTo;
+    }
   }
 
+  async function handleAdminClick() {
+    setActiveAction("admin");
+    const success = await signInWithAdminToken();
+    setActiveAction(null);
+    if (success) {
+      window.location.href = redirectTo;
+    }
+  }
+
+  const isWorking = signingIn || activeAction !== null;
+
   return (
-    <div className="flex flex-col items-center gap-3">
+    <div className="flex flex-col items-center gap-3 w-full">
       <button
-        onClick={handleClick}
-        disabled={loading}
+        onClick={handleGoogleClick}
+        disabled={isWorking}
         className={[
-          "inline-flex items-center gap-3 rounded-lg border border-border bg-card",
+          "inline-flex w-full items-center justify-center gap-3 rounded-lg border border-border bg-card",
           "px-6 py-3 text-sm font-medium shadow-sm transition-colors",
           "hover:bg-accent hover:text-accent-foreground",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -46,7 +61,7 @@ export function GoogleSignInButton({
         <svg
           aria-hidden="true"
           viewBox="0 0 24 24"
-          className="h-5 w-5"
+          className="h-5 w-5 shrink-0"
           xmlns="http://www.w3.org/2000/svg"
         >
           <path
@@ -66,13 +81,52 @@ export function GoogleSignInButton({
             fill="#EA4335"
           />
         </svg>
-        {loading ? "Signing in…" : "Continue with Google"}
+        {activeAction === "google" ? "Signing in with Google…" : "Continue with Google"}
+      </button>
+
+      {/* Dev / Ngrok bypass button to prevent being blocked by popup restrictions */}
+      <button
+        onClick={handleAdminClick}
+        disabled={isWorking}
+        type="button"
+        className={[
+          "inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary/10 border border-primary/20",
+          "px-4 py-2.5 text-xs font-semibold text-primary transition hover:bg-primary/20",
+          "disabled:opacity-50 disabled:pointer-events-none",
+        ].join(" ")}
+      >
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M13 10V3L4 14h7v7l9-11h-7z"
+          />
+        </svg>
+        {activeAction === "admin"
+          ? "Authenticating Admin Session…"
+          : "Instant Admin Sign-In (Local / ngrok)"}
       </button>
 
       {error && (
-        <p className="text-sm text-destructive" role="alert">
-          {error.message}
-        </p>
+        <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-left w-full">
+          <p className="text-xs font-semibold text-destructive">
+            Sign-in issue detected:
+          </p>
+          <p className="text-xs text-destructive/90 mt-0.5 break-all">
+            {error.message}
+          </p>
+          {error.message.includes("unauthorized-domain") && (
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Tip: Use the <strong>Instant Admin Sign-In</strong> button above or add this ngrok domain to Firebase Console → Authentication → Settings → Authorized domains.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

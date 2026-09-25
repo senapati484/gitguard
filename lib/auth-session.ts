@@ -58,8 +58,19 @@ export async function getSessionUid(): Promise<string | null> {
  * Builds the Set-Cookie response header value for the session cookie.
  * Used in /api/auth/session after createSessionCookie().
  */
-export function buildSessionCookieHeader(cookie: string): string {
-  const isProduction = process.env.NODE_ENV === "production";
+export function buildSessionCookieHeader(
+  cookie: string,
+  forceSecure?: boolean
+): string {
+  const isHttps =
+    forceSecure !== undefined
+      ? forceSecure
+      : process.env.NODE_ENV === "production" ||
+        Boolean(
+          process.env.NEXT_PUBLIC_APP_URL &&
+            process.env.NEXT_PUBLIC_APP_URL.startsWith("https://")
+        );
+
   const parts = [
     `${SESSION_COOKIE_NAME}=${cookie}`,
     "HttpOnly",
@@ -67,6 +78,6 @@ export function buildSessionCookieHeader(cookie: string): string {
     `Max-Age=${SESSION_DURATION_MS / 1000}`,
     "SameSite=Lax",
   ];
-  if (isProduction) parts.push("Secure");
+  if (isHttps) parts.push("Secure");
   return parts.join("; ");
 }
