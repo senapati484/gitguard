@@ -12,6 +12,7 @@ import {
   type IgnoredAuditRecord,
 } from "@/lib/gitguard-ignore";
 import { HealthTrendChart, type HealthTrendPoint } from "@/components/dashboard/HealthTrendChart";
+import { AutoSolveButton } from "@/components/dashboard/AutoSolveButton";
 
 interface RepoPageProps {
   params: Promise<{ id: string }>;
@@ -398,6 +399,7 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
                     <th className="py-3 px-6 font-medium">BugAgent</th>
                     <th className="py-3 px-6 font-medium">SecurityAgent</th>
                     <th className="py-3 px-6 font-medium">SEO Score</th>
+                    <th className="py-3 px-6 font-medium text-center">Auto-Solve</th>
                     <th className="py-3 px-6 font-medium text-right">Timestamp</th>
                   </tr>
                 </thead>
@@ -493,6 +495,22 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
                             </span>
                           ) : (
                             <span className="text-muted-foreground">N/A</span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-6 text-center">
+                          {run.decision === "BLOCK" || (run.secretCount ?? 0) > 0 ? (
+                            <AutoSolveButton
+                              installationId={id}
+                              runId={run.id}
+                              sha={run.sha}
+                              repo={run.repo || primaryRepo}
+                              initialVerdict={run.decision}
+                              secretCount={run.secretCount}
+                              size="sm"
+                            />
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">—</span>
                           )}
                         </td>
 

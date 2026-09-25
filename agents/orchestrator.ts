@@ -24,6 +24,7 @@ import type { Octokit } from "@octokit/core";
 import {
   runGitleaksScan,
   filterSecretsWithLLM,
+  postSecretSuggestedChanges,
   type SecretVerificationResult,
 } from "@/agents/secret-agent";
 import {
@@ -170,8 +171,27 @@ async function secretAgentNode(state: GitGuardState): Promise<Partial<GitGuardSt
       activeFindings.push(f);
     }
 
+    const confirmedSecrets = activeFindings.filter((f) => f.confirmed);
+
+    // If on a pull request and auto-solve suggestions exist, post one-click inline PR suggestions
+    const actionableSecrets = confirmedSecrets.filter(
+      (s) => Boolean(s.suggestedChange && s.suggestedChange.trim().length > 0)
+    );
+    if (actionableSecrets.length > 0 && state.pullNumber) {
+      await postSecretSuggestedChanges({
+        octokit: state.octokit,
+        owner: state.owner,
+        repo: state.repo,
+        sha: state.sha,
+        pullNumber: state.pullNumber,
+        secrets: actionableSecrets,
+      }).catch((err) => {
+        console.warn(`[graph:secret_agent] Notice: could not post inline PR secret suggestions:`, err);
+      });
+    }
+
     console.log(
-      `[graph:secret_agent] Found ${activeFindings.filter((f) => f.confirmed).length} confirmed secret(s) (${ignoredSecrets} whitelisted)`
+      `[graph:secret_agent] Found ${confirmedSecrets.length} confirmed secret(s) (${ignoredSecrets} whitelisted)`
     );
     return { secretFindings: activeFindings, ignoredCount: ignoredSecrets };
   } catch (err) {
@@ -668,7 +688,8 @@ async function orchestratorNode(state: GitGuardState): Promise<Partial<GitGuardS
   // 1. Generate Conventional Commit message
   const commitResult = await generateConventionalCommit(
     state.diff,
-    state.bugFindings || []
+    state.bugFindings || [],
+    state.secretFindings || []
   );
 
   // 2. Synthesize Human-Readable PR Comment via Sonnet
@@ -739,22 +760,35 @@ Structure:
     prCommentText ||
     `### 🛡️ GitGuard Analysis: ${decision}\n\nVerdict: **${decision}**\n- Secrets: ${confirmedSecrets.length}\n- Bugs: ${(state.bugFindings || []).length}\n- Security: ${(state.securityFindings || []).length}\n- SEO & Web Vitals Score: ${state.seoScore ?? 100}/100 (${(state.seoFindings || []).length} issues)`;
 
-  // Append high-confidence suggested changes if not already included in Sonnet output
-  const highConfidenceSuggestions = (state.bugFindings || []).filter(
+  // Append high-confidence suggested changes (both bug fixes and secret auto-solves)
+  const highConfidenceBugSuggestions = (state.bugFindings || []).filter(
     (b) =>
       (b.confidence === "high" || b.severity === "critical" || b.severity === "high") &&
       Boolean(b.suggestedChange && b.suggestedChange.trim().length > 0)
   );
+  const highConfidenceSecretSuggestions = (state.secretFindings || []).filter(
+    (s) => s.confirmed && Boolean(s.suggestedChange && s.suggestedChange.trim().length > 0)
+  );
 
-  if (highConfidenceSuggestions.length > 0 && !finalComment.includes("```suggestion")) {
-    const suggestionBlocks = highConfidenceSuggestions
+  if (
+    (highConfidenceBugSuggestions.length > 0 || highConfidenceSecretSuggestions.length > 0) &&
+    !finalComment.includes("```suggestion")
+  ) {
+    const secretBlocks = highConfidenceSecretSuggestions
+      .map(
+        (s) =>
+          `#### ⚡ Auto-Solve Secret: \`${s.file}:${s.line}\` (${s.ruleId || "Secret Leak"})\n${s.reason}\n\`\`\`suggestion\n${s.suggestedChange?.trim()}\n\`\`\`\n> 💡 *Move raw credential to \`.env.local\` as \`${s.envVarName || "SECRET_KEY"}\` so it remains private.*`
+      )
+      .join("\n\n");
+
+    const bugBlocks = highConfidenceBugSuggestions
       .map(
         (b) =>
           `#### 💡 \`${b.file}:${b.line}\` (${b.severity.toUpperCase()})\n${b.message}\n\`\`\`suggestion\n${b.suggestedChange?.trim()}\n\`\`\``
       )
       .join("\n\n");
 
-    finalComment += `\n\n---\n### 💡 High-Confidence Suggested Changes\nGitGuard identified one-click fixes for the following defects:\n\n${suggestionBlocks}`;
+    finalComment += `\n\n---\n### ⚡ One-Click Auto-Solve & Suggested Changes\nGitGuard identified one-click fixes for the following defects:\n\n${[secretBlocks, bugBlocks].filter(Boolean).join("\n\n")}`;
   }
 
   // Append .gitguardignore notice if any findings were whitelisted

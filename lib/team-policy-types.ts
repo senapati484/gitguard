@@ -92,7 +92,8 @@ export const DEFAULT_ORG_POLICY: OrgPolicy = {
 export type AuditLogAction =
   | "policy_change"
   | "ignore_applied"
-  | "verdict_override";
+  | "verdict_override"
+  | "auto_solve_remediation";
 
 export interface AuditLogActor {
   uid?: string;

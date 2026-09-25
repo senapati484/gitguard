@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "worker": "DOTENV_CONFIG_PATH=.env.local tsx watch -r dotenv/config worker.ts"
+    "worker": "DOTENV_CONFIG_PATH=.env.local tsx watch -r dotenv/config worker.ts",
+    "guard:protect": "tsx scripts/gitguard-protect.ts",
+    "guard:solve": "tsx scripts/gitguard-protect.ts --solve",
+    "install-hooks": "tsx scripts/install-hooks.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.2.12",

@@ -7,6 +7,7 @@ import { calculateHealthScore, type RepoRunRecord } from "@/lib/health-score";
 import { getIgnoredAuditRecords, type IgnoredAuditRecord } from "@/lib/gitguard-ignore";
 import type { PlanTier, BillingProvider } from "@/lib/plan-config";
 import { getUserInstallationDocs } from "@/lib/installations";
+import { AutoSolveButton } from "@/components/dashboard/AutoSolveButton";
 
 export const metadata: Metadata = {
   title: "Dashboard | GitGuard",
@@ -391,6 +392,7 @@ export default async function DashboardPage() {
                             <th className="pb-2.5 font-semibold">Event / Target</th>
                             <th className="pb-2.5 font-semibold">Commit SHA</th>
                             <th className="pb-2.5 font-semibold">Agent Breakdown</th>
+                            <th className="pb-2.5 font-semibold text-center">Auto-Solve</th>
                             <th className="pb-2.5 font-semibold text-right">Analyzed</th>
                           </tr>
                         </thead>
@@ -500,6 +502,22 @@ export default async function DashboardPage() {
                                         </span>
                                       )}
                                   </div>
+                                </td>
+
+                                <td className="py-3 text-center">
+                                  {run.decision === "BLOCK" || (run.secretCount ?? 0) > 0 ? (
+                                    <AutoSolveButton
+                                      installationId={inst.installationId}
+                                      runId={run.id}
+                                      sha={run.sha}
+                                      repo={targetRepo}
+                                      initialVerdict={run.decision}
+                                      secretCount={run.secretCount}
+                                      size="sm"
+                                    />
+                                  ) : (
+                                    <span className="text-[11px] text-slate-400 font-medium">—</span>
+                                  )}
                                 </td>
 
                                 <td className="py-3 text-right text-slate-500 font-mono text-xs">

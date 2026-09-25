@@ -38,6 +38,12 @@ export interface SecretVerificationResult {
   line: number;
   confirmed: boolean;
   reason: string;
+  ruleId?: string;
+  secretMatch?: string;
+  suggestedChange?: string;
+  originalCode?: string;
+  envVarName?: string;
+  remediation?: string;
 }
 
 export interface GitleaksFinding {
@@ -64,31 +70,37 @@ export interface RunSecretScanOptions {
   customPatterns?: CustomSecretPattern[];
 }
 
-// ── System Prompt for False-Positive Filtering ────────────────────────────────
+// ── System Prompt for False-Positive Filtering & Auto-Solve Remediation ──────
 
-const SECRET_REVIEW_SYSTEM_PROMPT = `You are an elite application security expert specializing in detecting real credentials, API tokens, private keys, and secrets while eliminating false positives.
+const SECRET_REVIEW_SYSTEM_PROMPT = `You are an elite application security expert specializing in detecting real credentials, API tokens, private keys, and secrets while eliminating false positives and generating automated one-click remediation.
 
+TASK:
 Analyze the candidate secret findings extracted from a git diff.
-Carefully distinguish real leaked credentials from common false positives such as:
-1. Dummy/mock/placeholder strings (e.g., "YOUR_API_KEY_HERE", "example-key", "dummy-secret-12345", "1234567890abcdef", "TODO_ADD_KEY", "test-token").
-2. Example documentation, sample configs, or unit test mock fixtures (e.g., test/fixture files, mock response payloads).
-3. Public IDs, git commit hashes, UUIDs, or random non-secret identifiers mistakenly flagged as high entropy.
-4. Non-sensitive tokens (e.g. public Stripe publishable keys 'pk_test_*', standard package hashes).
+1. Carefully distinguish real leaked credentials from common false positives such as:
+   - Dummy/mock/placeholder strings (e.g., "YOUR_API_KEY_HERE", "example-key", "dummy-secret", "TODO_ADD_KEY", "sample-token").
+   - Example documentation, sample configs, or unit test mock fixtures (e.g., test/fixture files, mock response payloads).
+   - Public IDs, git commit hashes, UUIDs, or random non-secret identifiers mistakenly flagged as high entropy.
+   - Non-sensitive tokens (e.g. public Stripe publishable keys 'pk_test_*', standard package hashes).
 
-For each candidate, respond with:
-- file: the filepath
-- line: line number
-- confirmed: true ONLY if you are highly confident this is a real or potentially active secret leak; false if it is a test fixture, dummy placeholder, or documentation example.
-- reason: concise explanation for your judgment.
+2. For each confirmed secret:
+   - Provide an automated solution ("Auto-Solve"):
+     - envVarName: a clean, standard environment variable name (e.g. STRIPE_SECRET_KEY, OPENAI_API_KEY, GITHUB_TOKEN, DATABASE_URL).
+     - originalCode: the line with the hardcoded secret.
+     - suggestedChange: the clean code line replacing the raw credential with process.env.ENV_VAR_NAME (or equivalent language env read).
+     - remediation: step-by-step guidance to store the secret in .env.local and reference it safely.
 
 OUTPUT FORMAT:
-You MUST respond with a valid JSON array matching this exact schema and nothing else:
+Return ONLY a valid JSON array matching this exact schema:
 [
   {
-    "file": "path/to/file",
+    "file": "path/to/file.ts",
     "line": 42,
     "confirmed": true,
-    "reason": "Live high-entropy AWS access key in production config"
+    "reason": "Live high-entropy AWS access key in production config",
+    "envVarName": "AWS_SECRET_ACCESS_KEY",
+    "originalCode": "const secretKey = \\\"RAW_EXPOSED_TOKEN_HERE\\\";",
+    "suggestedChange": "const secretKey = process.env.AWS_SECRET_ACCESS_KEY || \\\"\\\";",
+    "remediation": "Move credential to .env.local as AWS_SECRET_ACCESS_KEY and inject via environment"
   }
 ]`;
 
@@ -404,23 +416,63 @@ function parseLLMJsonResults(
     const cleanJson = rawText.replace(/```(?:json)?/g, "").trim();
     const parsed = JSON.parse(cleanJson);
     if (Array.isArray(parsed)) {
-      return parsed.map((item) => ({
-        file: String(item.file || ""),
-        line: Number(item.line || 1),
-        confirmed: Boolean(item.confirmed),
-        reason: String(item.reason || "Secret detected"),
-      }));
+      return parsed.map((item) => {
+        const file = String(item.file || "");
+        const line = Number(item.line || 1);
+        const confirmed = Boolean(item.confirmed);
+        const reason = String(item.reason || "Secret detected");
+
+        // Match against gitleaks finding for metadata
+        const matchingFinding = fallbackFindings.find(
+          (f) => f.File === file && f.StartLine === line
+        );
+
+        const envVarName =
+          item.envVarName ||
+          (matchingFinding?.RuleID
+            ? matchingFinding.RuleID.toUpperCase().replace(/[^A-Z0-9_]/g, "_")
+            : "SECRET_KEY");
+
+        const suggestedChange =
+          item.suggestedChange ||
+          `process.env.${envVarName} || ""`;
+
+        const remediation =
+          item.remediation ||
+          `Move the secret credential to .env.local as ${envVarName} and load it securely through environment variables.`;
+
+        return {
+          file,
+          line,
+          confirmed,
+          reason,
+          ruleId: matchingFinding?.RuleID,
+          secretMatch: matchingFinding?.Secret || matchingFinding?.Match,
+          envVarName,
+          suggestedChange: confirmed ? suggestedChange : undefined,
+          originalCode: item.originalCode,
+          remediation: confirmed ? remediation : undefined,
+        };
+      });
     }
   } catch (err) {
     console.warn("[secret-agent] Failed to parse LLM JSON response:", rawText);
   }
 
-  return fallbackFindings.map((f) => ({
-    file: f.File,
-    line: f.StartLine,
-    confirmed: true,
-    reason: `Potential secret flagged by ${f.RuleID}`,
-  }));
+  return fallbackFindings.map((f) => {
+    const envVarName = f.RuleID.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+    return {
+      file: f.File,
+      line: f.StartLine,
+      confirmed: true,
+      reason: `Potential secret flagged by ${f.RuleID}`,
+      ruleId: f.RuleID,
+      secretMatch: f.Secret || f.Match,
+      envVarName,
+      suggestedChange: `process.env.${envVarName} || ""`,
+      remediation: `Move credential into .env.local as ${envVarName} and reference via process.env.${envVarName}`,
+    };
+  });
 }
 
 // ── 3. GitHub Check Run Creation ──────────────────────────────────────────────
@@ -539,11 +591,22 @@ export async function runSecretScan({
       .map((s) => `- **\`${s.file}:${s.line}\`**: ${s.reason}`)
       .join("\n");
 
+    const autoSolveBlocks = activeSecrets
+      .filter((s) => s.suggestedChange)
+      .map(
+        (s) =>
+          `#### ⚡ Auto-Solve Fix: \`${s.file}:${s.line}\`\n${s.reason}\n\`\`\`suggestion\n${s.suggestedChange?.trim()}\n\`\`\`\n> Store credential in \`.env.local\` as \`${s.envVarName || "SECRET_KEY"}\``
+      )
+      .join("\n\n");
+
     const summary = [
       `### 🚨 Confirmed Secret(s) Found`,
       `GitGuard detected **${activeSecrets.length}** confirmed sensitive credential(s) in this commit:`,
       markdownList,
-      `**Action required:** Revoke and rotate these credentials immediately and remove them from git history.`,
+      autoSolveBlocks
+        ? `\n### ⚡ One-Click Auto-Solve Suggestions\nApply these replacements to remove raw credentials from the codebase and load them safely from environment variables:\n\n${autoSolveBlocks}`
+        : "",
+      `**Action required:** Revoke and rotate these credentials immediately and load them securely from environment variables.`,
       ignoredCount > 0
         ? `\n> 🛡️ **.gitguardignore**: ${ignoredCount} secret finding(s) were whitelisted and audited.`
         : "",
@@ -575,3 +638,83 @@ export async function runSecretScan({
     ignoredCount,
   };
 }
+
+// ── 4. PR Inline Suggested Changes for Secrets (Auto-Solve) ──────────────────
+
+/**
+ * Posts GitHub one-click suggested changes (```suggestion) directly to PR review comments
+ * for confirmed secrets that have auto-solve replacements.
+ */
+export async function postSecretSuggestedChanges({
+  octokit,
+  owner,
+  repo,
+  sha,
+  pullNumber,
+  secrets,
+}: {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  sha: string;
+  pullNumber?: number;
+  secrets: SecretVerificationResult[];
+}): Promise<{ postedCount: number; errors: string[] }> {
+  const actionableSecrets = secrets.filter(
+    (s) => s.confirmed && Boolean(s.suggestedChange && s.suggestedChange.trim().length > 0)
+  );
+
+  if (actionableSecrets.length === 0) {
+    return { postedCount: 0, errors: [] };
+  }
+
+  let targetPr = pullNumber;
+  if (!targetPr) {
+    try {
+      const prsResp = await octokit.request("GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", {
+        owner,
+        repo,
+        commit_sha: sha,
+      });
+      if (Array.isArray(prsResp.data) && prsResp.data.length > 0) {
+        targetPr = prsResp.data[0].number;
+      }
+    } catch {
+      // Commit might not be part of open PR
+    }
+  }
+
+  let postedCount = 0;
+  const errors: string[] = [];
+
+  if (targetPr) {
+    for (const secret of actionableSecrets) {
+      try {
+        const suggestionBody = `### ⚡ GitGuard Secret Auto-Solve Suggestion\n**Remediation:** ${secret.remediation || "Extract secret into environment variable"}\n\n\`\`\`suggestion\n${secret.suggestedChange?.trim()}\n\`\`\`\n\n> 💡 *Save the credential in \`.env.local\` as \`${secret.envVarName || "SECRET_KEY"}\` so it is never committed to GitHub.*`;
+
+        await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/comments", {
+          owner,
+          repo,
+          pull_number: targetPr,
+          commit_id: sha,
+          path: secret.file,
+          line: secret.line,
+          side: "RIGHT",
+          body: suggestionBody,
+        });
+
+        postedCount++;
+        console.log(
+          `[secret-agent] Posted GitHub auto-solve suggested change for ${secret.file}:${secret.line} on PR #${targetPr}`
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[secret-agent] Notice: inline PR suggestion on ${secret.file}:${secret.line}: ${msg}`);
+        errors.push(`${secret.file}:${secret.line} - ${msg}`);
+      }
+    }
+  }
+
+  return { postedCount, errors };
+}
+

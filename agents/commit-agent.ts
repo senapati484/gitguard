@@ -17,6 +17,7 @@
 import type { Octokit } from "@octokit/core";
 import { generateAICompletion } from "@/lib/ai-client";
 import type { BugFinding } from "@/agents/bug-agent";
+import type { SecretVerificationResult } from "@/agents/secret-agent";
 import { extractCompressedHunks } from "@/lib/context-compressor";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -42,6 +43,7 @@ export interface RunCommitAgentOptions {
   sha: string;
   diff: string;
   bugFindings: BugFinding[];
+  secretFindings?: SecretVerificationResult[];
   pullNumber?: number;
 }
 
@@ -50,7 +52,7 @@ export interface RunCommitAgentOptions {
 const COMMIT_AGENT_SYSTEM_PROMPT = `You are an expert software engineer and technical writer specializing in git workflow best practices and the Conventional Commits specification (v1.0.0).
 
 TASK:
-Analyze the provided git diff and BugAgent context.
+Analyze the provided git diff, BugAgent context, and SecretAgent context.
 1. Generate a high-quality Conventional Commit message for the changeset:
    Format:
    <type>(<scope>): <subject in imperative mood, no period, <= 72 chars>
@@ -58,23 +60,24 @@ Analyze the provided git diff and BugAgent context.
    <body with bullet points explaining WHAT changed and WHY>
 
    Allowed types: feat, fix, refactor, perf, test, docs, style, chore, build, ci.
+   - CRITICAL: If confirmed secrets were detected by SecretAgent, set type to 'fix' with scope 'security' (e.g. fix(security): redact exposed credential and load from environment).
    - If bugs were detected by BugAgent, note them and adjust type to 'fix' if this changeset addresses bugs, or reference the issues in the body.
 
-2. If any BugAgent finding provides an actionable code fix for a specific file and line, provide a concrete one-click replacement code snippet for the GitHub \`\`\`suggestion\`\`\` block.
+2. If any SecretAgent finding or BugAgent finding provides an actionable code fix for a specific file and line, provide a concrete one-click replacement code snippet for the GitHub \`\`\`suggestion\`\`\` block. Prioritize fixing confirmed secret leaks by replacing the raw credential with process.env.ENV_VAR_NAME.
 
 OUTPUT SCHEMA:
 Return ONLY a valid JSON object matching this schema:
 {
-  "commitMessage": "feat(auth): add null check for user session\\n\\n- Prevent potential null dereference when user session is undefined\\n- Add error handling for async session verification",
-  "type": "feat",
-  "scope": "auth",
-  "subject": "add null check for user session",
-  "body": "- Prevent potential null dereference when user session is undefined\\n- Add error handling for async session verification",
+  "commitMessage": "fix(security): redact exposed credential and load from environment\\n\\n- Extract hardcoded secret into environment variable\\n- Guard against credential exposure in public git history",
+  "type": "fix",
+  "scope": "security",
+  "subject": "redact exposed credential and load from environment",
+  "body": "- Extract hardcoded secret into environment variable\\n- Guard against credential exposure in public git history",
   "suggestedFix": {
     "file": "path/to/file.ts",
     "line": 42,
-    "replacementCode": "const session = user?.session ?? null;",
-    "explanation": "Use optional chaining to guard against null dereference"
+    "replacementCode": "const apiKey = process.env.API_KEY || \\\"\\\";",
+    "explanation": "Replace raw secret token with secure environment variable"
   }
 }`;
 
@@ -82,8 +85,14 @@ Return ONLY a valid JSON object matching this schema:
 
 export async function generateConventionalCommit(
   diff: string,
-  bugFindings: BugFinding[]
+  bugFindings: BugFinding[] = [],
+  secretFindings: SecretVerificationResult[] = []
 ): Promise<CommitMessageResult> {
+  const confirmedSecrets = secretFindings.filter((s) => s.confirmed);
+
+  // Fast auto-solve fallback for confirmed secrets if AI is offline
+  const firstSecretWithFix = confirmedSecrets.find((s) => s.suggestedChange);
+
   const hunks = extractCompressedHunks(diff);
   const diffContext =
     hunks.length > 0
@@ -95,6 +104,23 @@ export async function generateConventionalCommit(
 
   const userPrompt = `Git Changes Summary:
 ${diffContext}
+
+SecretAgent Findings Context:
+${
+  confirmedSecrets.length > 0
+    ? JSON.stringify(
+        confirmedSecrets.map((s) => ({
+          file: s.file,
+          line: s.line,
+          reason: s.reason,
+          envVarName: s.envVarName,
+          suggestedChange: s.suggestedChange,
+        })),
+        null,
+        2
+      )
+    : "No secrets found by SecretAgent."
+}
 
 BugAgent Findings Context:
 ${
@@ -123,12 +149,29 @@ Generate the Conventional Commit message and suggested-change block in JSON form
     jsonMode: true,
   });
 
+  const defaultSecretCommit: CommitMessageResult = {
+    commitMessage: "fix(security): redact exposed credential and load from environment\n\n- Extract sensitive credentials into environment variables\n- Secure codebase against accidental token leaks",
+    type: "fix",
+    scope: "security",
+    subject: "redact exposed credential and load from environment",
+    suggestedFix: firstSecretWithFix
+      ? {
+          file: firstSecretWithFix.file,
+          line: firstSecretWithFix.line,
+          replacementCode: firstSecretWithFix.suggestedChange || `process.env.${firstSecretWithFix.envVarName || "SECRET_KEY"} || ""`,
+          explanation: `Move secret to .env.local as ${firstSecretWithFix.envVarName || "SECRET_KEY"} and read via environment`,
+        }
+      : undefined,
+  };
+
   if (!rawCompletion) {
-    return {
-      commitMessage: "chore: update codebase with recent changes",
-      type: "chore",
-      subject: "update codebase with recent changes",
-    };
+    return confirmedSecrets.length > 0
+      ? defaultSecretCommit
+      : {
+          commitMessage: "chore: update codebase with recent changes",
+          type: "chore",
+          subject: "update codebase with recent changes",
+        };
   }
 
   try {
@@ -137,11 +180,13 @@ Generate the Conventional Commit message and suggested-change block in JSON form
     return parsed;
   } catch (err) {
     console.warn("[commit-agent] Failed to parse AI commit message response:", rawCompletion);
-    return {
-      commitMessage: "chore: update codebase with recent changes",
-      type: "chore",
-      subject: "update codebase with recent changes",
-    };
+    return confirmedSecrets.length > 0
+      ? defaultSecretCommit
+      : {
+          commitMessage: "chore: update codebase with recent changes",
+          type: "chore",
+          subject: "update codebase with recent changes",
+        };
   }
 }
 
@@ -194,6 +239,7 @@ export async function runCommitAgent({
   sha,
   diff,
   bugFindings,
+  secretFindings = [],
   pullNumber: explicitPullNumber,
 }: RunCommitAgentOptions): Promise<{
   success: boolean;
@@ -202,7 +248,7 @@ export async function runCommitAgent({
 }> {
   console.log(`[commit-agent] Generating Conventional Commit for ${owner}/${repo} @ ${sha.slice(0, 7)}`);
 
-  const result = await generateConventionalCommit(diff, bugFindings);
+  const result = await generateConventionalCommit(diff, bugFindings, secretFindings);
   console.log(`[commit-agent] Generated commit: "${result.commitMessage.split("\n")[0]}"`);
 
   const pullNumber = await resolvePullNumber(
