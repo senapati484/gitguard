@@ -35,6 +35,11 @@ import {
   detectSecurityVulnerabilities,
   type SecurityFinding,
 } from "@/agents/security-agent";
+import {
+  runSEOScan,
+  publishSEOCheckRun,
+  type SEOFinding,
+} from "@/agents/seo-agent";
 import { generateConventionalCommit } from "@/agents/commit-agent";
 import { generateAICompletion } from "@/lib/ai-client";
 
@@ -60,6 +65,14 @@ export const GitGuardStateAnnotation = Annotation.Root({
   securityFindings: Annotation<SecurityFinding[]>({
     reducer: (curr, next) => next ?? curr ?? [],
     default: () => [],
+  }),
+  seoFindings: Annotation<SEOFinding[]>({
+    reducer: (curr, next) => next ?? curr ?? [],
+    default: () => [],
+  }),
+  seoScore: Annotation<number | undefined>({
+    reducer: (curr, next) => next ?? curr,
+    default: () => undefined,
   }),
 
   // Dialogue notes between BugAgent and SecurityAgent
@@ -134,7 +147,46 @@ async function securityAgentNode(state: GitGuardState): Promise<Partial<GitGuard
 }
 
 /**
- * Join Barrier: Wait for all 3 parallel scanner branches to arrive.
+ * SEOAgent Node: Audits frontend files (.jsx, .tsx, .html) for meta tags, Open Graph,
+ * image alt text, and layout-shifting inline styles (CLS).
+ * Gated to only run when the diff touches frontend files.
+ */
+async function seoAgentNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
+  console.log(`[graph:seo_agent] Checking frontend files for SEO, Open Graph, and CLS...`);
+  try {
+    const scanResult = await runSEOScan(state.diff);
+    if (scanResult.skipped) {
+      console.log(`[graph:seo_agent] Skipped: ${scanResult.reason}`);
+      return { seoFindings: [], seoScore: 100 };
+    }
+
+    console.log(
+      `[graph:seo_agent] Found ${scanResult.findings.length} SEO finding(s), score: ${scanResult.score}/100`
+    );
+
+    // Publish dedicated Check Run asynchronously
+    await publishSEOCheckRun(
+      state.octokit,
+      state.owner,
+      state.repo,
+      state.sha,
+      scanResult
+    ).catch((err) => {
+      console.warn(`[graph:seo_agent] Could not publish Check Run:`, err);
+    });
+
+    return {
+      seoFindings: scanResult.findings,
+      seoScore: scanResult.score,
+    };
+  } catch (err) {
+    console.error(`[graph:seo_agent] Error analyzing SEO:`, err);
+    return { seoFindings: [], seoScore: 100 };
+  }
+}
+
+/**
+ * Join Barrier: Wait for all 4 parallel scanner branches to arrive.
  */
 async function joinScannersNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
   return state;
@@ -240,7 +292,8 @@ async function orchestratorNode(state: GitGuardState): Promise<Partial<GitGuardS
     (state.bugFindings || []).filter((b) => b.severity === "medium" || b.severity === "low").length +
     (state.securityFindings || []).filter(
       (s) => !s.isExploitable || s.severity === "medium" || s.severity === "low"
-    ).length;
+    ).length +
+    (state.seoFindings || []).filter((s) => s.severity === "high" || s.severity === "medium").length;
 
   const decision: "PASS" | "WARN" | "BLOCK" = hasBlockers
     ? "BLOCK"
@@ -257,7 +310,7 @@ async function orchestratorNode(state: GitGuardState): Promise<Partial<GitGuardS
   );
 
   // 2. Synthesize Human-Readable PR Comment via Sonnet
-  const synthesisPrompt = `You are GitGuard Orchestrator synthesizing findings from SecretAgent, BugAgent, and SecurityAgent.
+  const synthesisPrompt = `You are GitGuard Orchestrator synthesizing findings from SecretAgent, BugAgent, SecurityAgent, and SEOAgent.
 
 OVERALL VERDICT: ${decision}
 SHA: ${state.sha.slice(0, 7)}
@@ -280,6 +333,13 @@ ${
     .join("\n") || "None"
 }
 
+4. SEOAgent: ${(state.seoFindings || []).length} SEO & Web Vitals finding(s) (Score: ${state.seoScore ?? 100}/100)
+${
+  (state.seoFindings || [])
+    .map((s) => `- [${s.severity.toUpperCase()}] ${s.file}:${s.line} (${s.ruleId}): ${s.message}\n  Fix: ${s.recommendation}`)
+    .join("\n") || "None (or backend-only diff)"
+}
+
 ${
   state.dialogueNotes && state.dialogueNotes.length > 0
     ? `AGENT CONSENSUS DIALOGUE:\n${state.dialogueNotes.join("\n\n")}`
@@ -294,7 +354,7 @@ Write a polished, professional, human-readable GitHub PR review comment in GitHu
 Structure:
 - Banner / Verdict header with clear emoji indicator (🛑 BLOCK / ⚠️ WARN / ✅ PASS)
 - Executive Summary (2-3 sentences explaining the posture)
-- Detailed breakdown by category (Secrets, Bugs, Security) with bullet points and file:line references
+- Detailed breakdown by category (Secrets, Bugs, Security, SEO & Web Vitals) with bullet points and file:line references
 - If dialogue consensus exists, include a short "Agent Consensus" section
 - Suggested Conventional Commit block
 - Actionable next steps for the developer`;
@@ -315,7 +375,7 @@ Structure:
 
   const finalComment =
     prCommentText ||
-    `### 🛡️ GitGuard Analysis: ${decision}\n\nVerdict: **${decision}**\n- Secrets: ${confirmedSecrets.length}\n- Bugs: ${(state.bugFindings || []).length}\n- Security: ${(state.securityFindings || []).length}`;
+    `### 🛡️ GitGuard Analysis: ${decision}\n\nVerdict: **${decision}**\n- Secrets: ${confirmedSecrets.length}\n- Bugs: ${(state.bugFindings || []).length}\n- Security: ${(state.securityFindings || []).length}\n- SEO & Web Vitals Score: ${state.seoScore ?? 100}/100 (${(state.seoFindings || []).length} issues)`;
 
   // 3. Post GitHub Check Runs
   try {
@@ -370,19 +430,22 @@ export const gitGuardGraph = new StateGraph(GitGuardStateAnnotation)
   .addNode("secret_agent", secretAgentNode)
   .addNode("bug_agent", bugAgentNode)
   .addNode("security_agent", securityAgentNode)
+  .addNode("seo_agent", seoAgentNode)
   .addNode("join_scanners", joinScannersNode)
   .addNode("dialogue_node", dialogueNode)
   .addNode("orchestrator_node", orchestratorNode)
 
-  // Parallel fan-out from START into all 3 agents
+  // Parallel fan-out from START into all 4 agents
   .addEdge(START, "secret_agent")
   .addEdge(START, "bug_agent")
   .addEdge(START, "security_agent")
+  .addEdge(START, "seo_agent")
 
-  // Fan-in: all 3 agents converge at join_scanners barrier
+  // Fan-in: all 4 agents converge at join_scanners barrier
   .addEdge("secret_agent", "join_scanners")
   .addEdge("bug_agent", "join_scanners")
   .addEdge("security_agent", "join_scanners")
+  .addEdge("seo_agent", "join_scanners")
 
   // Conditional Edge: If BugAgent and SecurityAgent collide on file+line -> dialogue_node, else orchestrator_node
   .addConditionalEdges("join_scanners", checkCollisionCondition, {

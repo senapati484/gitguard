@@ -35,6 +35,9 @@ export interface RepoRunRecord {
   lowCount?: number;
   dialogueTriggered?: boolean;
   createdAt: number; // Unix timestamp ms
+  // SEO & Web Vitals
+  seoScore?: number; // 0 - 100
+  seoDefectCount?: number;
 }
 
 export interface HealthRubricWeights {
@@ -44,6 +47,7 @@ export interface HealthRubricWeights {
   mediumPenalty: number;
   lowPenalty: number;
   maxBlockedRatioPenalty: number;
+  maxSeoPenalty: number;
 }
 
 export const DEFAULT_RUBRIC_WEIGHTS: HealthRubricWeights = {
@@ -53,6 +57,7 @@ export const DEFAULT_RUBRIC_WEIGHTS: HealthRubricWeights = {
   mediumPenalty: 5,
   lowPenalty: 2,
   maxBlockedRatioPenalty: 15,
+  maxSeoPenalty: 15,
 };
 
 export interface HealthScoreResult {
@@ -71,6 +76,9 @@ export interface HealthScoreResult {
     mediumCount: number;
     lowCount: number;
     passRate: number; // 0 - 100 %
+    avgSeoScore?: number;
+    seoRunsCount: number;
+    totalSeoDefects: number;
   };
   penalties: {
     secrets: number;
@@ -79,7 +87,13 @@ export interface HealthScoreResult {
     mediums: number;
     lows: number;
     blockedRatio: number;
+    seoDeduction: number;
     totalDeductions: number;
+  };
+  components: {
+    securityScore: number;
+    seoScore?: number;
+    compositeScore: number;
   };
 }
 
@@ -109,6 +123,8 @@ export function calculateHealthScore(
         mediumCount: 0,
         lowCount: 0,
         passRate: 100,
+        seoRunsCount: 0,
+        totalSeoDefects: 0,
       },
       penalties: {
         secrets: 0,
@@ -117,7 +133,13 @@ export function calculateHealthScore(
         mediums: 0,
         lows: 0,
         blockedRatio: 0,
+        seoDeduction: 0,
         totalDeductions: 0,
+      },
+      components: {
+        securityScore: 100,
+        seoScore: undefined,
+        compositeScore: 100,
       },
     };
   }
@@ -130,6 +152,9 @@ export function calculateHealthScore(
   let highCount = 0;
   let mediumCount = 0;
   let lowCount = 0;
+  let totalSeoScore = 0;
+  let seoRunsCount = 0;
+  let totalSeoDefects = 0;
 
   for (const r of runs) {
     if (r.decision === "PASS") passedRuns++;
@@ -141,9 +166,18 @@ export function calculateHealthScore(
     highCount += r.highCount || 0;
     mediumCount += r.mediumCount || 0;
     lowCount += r.lowCount || 0;
+
+    if (typeof r.seoScore === "number") {
+      totalSeoScore += r.seoScore;
+      seoRunsCount++;
+    }
+    if (typeof r.seoDefectCount === "number") {
+      totalSeoDefects += r.seoDefectCount;
+    }
   }
 
   const passRate = totalRuns > 0 ? Math.round((passedRuns / totalRuns) * 100) : 100;
+  const avgSeoScore = seoRunsCount > 0 ? Math.round(totalSeoScore / seoRunsCount) : undefined;
 
   // Calculate deductions
   const secretsDeduction = secretCount * weights.secretPenalty;
@@ -155,7 +189,13 @@ export function calculateHealthScore(
   const blockedRatio = totalRuns > 0 ? blockedRuns / totalRuns : 0;
   const blockedRatioDeduction = Math.round(blockedRatio * weights.maxBlockedRatioPenalty);
 
-  const totalDeductions =
+  // SEO composite deduction: if frontend runs have low average SEO score (< 90), deduct proportionally
+  const seoDeduction =
+    avgSeoScore !== undefined && avgSeoScore < 90
+      ? Math.min(weights.maxSeoPenalty ?? 15, Math.round((90 - avgSeoScore) * 0.3))
+      : 0;
+
+  const securityDeductions =
     secretsDeduction +
     criticalsDeduction +
     highsDeduction +
@@ -163,6 +203,9 @@ export function calculateHealthScore(
     lowsDeduction +
     blockedRatioDeduction;
 
+  const totalDeductions = securityDeductions + seoDeduction;
+
+  const securityScore = Math.max(0, Math.min(100, 100 - securityDeductions));
   const rawScore = 100 - totalDeductions;
   const score = Math.max(0, Math.min(100, rawScore));
 
@@ -213,6 +256,9 @@ export function calculateHealthScore(
       mediumCount,
       lowCount,
       passRate,
+      avgSeoScore,
+      seoRunsCount,
+      totalSeoDefects,
     },
     penalties: {
       secrets: secretsDeduction,
@@ -221,7 +267,13 @@ export function calculateHealthScore(
       mediums: mediumsDeduction,
       lows: lowsDeduction,
       blockedRatio: blockedRatioDeduction,
+      seoDeduction,
       totalDeductions,
+    },
+    components: {
+      securityScore,
+      seoScore: avgSeoScore,
+      compositeScore: score,
     },
   };
 }

@@ -251,6 +251,8 @@ async function processGitHubEvent(
     mediumCount,
     lowCount,
     dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,
+    seoScore: graphResult.seoScore,
+    seoDefectCount: (graphResult.seoFindings || []).length,
   }).catch((err) => {
     console.warn(`[worker] Failed to record run to Firestore:`, err);
   });
