@@ -19,15 +19,58 @@ export interface CompletionOptions {
   messages: ChatMessage[];
   temperature?: number;
   jsonMode?: boolean;
+  preferredModel?: "sonnet" | "haiku" | "default";
 }
 
 /**
- * Generate a chat completion using Groq with Gemini fallback.
+ * Generate a chat completion using Sonnet (if specified & key present), Groq (primary),
+ * or Gemini (fallback).
  */
 export async function generateAICompletion(
   options: CompletionOptions
 ): Promise<string> {
-  const { messages, temperature = 0.1, jsonMode = true } = options;
+  const { messages, temperature = 0.1, jsonMode = true, preferredModel } = options;
+
+  // ── 0. Optional Anthropic Sonnet (for Orchestrator synthesis) ──────────────
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  if (preferredModel === "sonnet" && anthropicApiKey) {
+    try {
+      console.log(`[ai-client] Calling Anthropic Claude 3.5 Sonnet for Orchestrator...`);
+      const systemMessages = messages.filter((m) => m.role === "system");
+      const conversationMessages = messages.filter((m) => m.role !== "system");
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": anthropicApiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-3-5-sonnet-20241022",
+          max_tokens: 2048,
+          system: systemMessages.map((m) => m.content).join("\n\n"),
+          messages: conversationMessages.map((m) => ({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.content,
+          })),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const content = data.content?.[0]?.text;
+        if (content) {
+          console.log(`[ai-client] Sonnet response received successfully`);
+          return content;
+        }
+      } else {
+        console.warn(`[ai-client] Anthropic Sonnet returned status ${res.status}. Falling back to Groq...`);
+      }
+    } catch (err) {
+      console.warn(`[ai-client] Anthropic Sonnet call failed, falling back to Groq:`, err);
+    }
+  }
 
   // ── 1. Primary: Groq API ──────────────────────────────────────────────────
   const groqApiKey = process.env.GROQ_API_KEY;

@@ -28,9 +28,7 @@ import {
   GITHUB_EVENTS_QUEUE,
   type GitHubEventJobData,
 } from "@/lib/queues/github-events";
-import { runSecretScan } from "@/agents/secret-agent";
-import { runBugScan } from "@/agents/bug-agent";
-import { runCommitAgent } from "@/agents/commit-agent";
+import { gitGuardGraph } from "@/agents/orchestrator";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -39,11 +37,11 @@ interface ProcessedDiffResult {
   filesChanged: number;
   files: string[];
   diffLength: number;
-  diffSummary?: string;
-  secretScanPassed?: boolean;
-  confirmedSecretsCount?: number;
-  bugScanPassed?: boolean;
+  decision?: "PASS" | "WARN" | "BLOCK";
+  secretCount?: number;
   bugCount?: number;
+  securityCount?: number;
+  dialogueTriggered?: boolean;
   suggestedCommitMessage?: string;
 }
 
@@ -200,36 +198,20 @@ async function processGitHubEvent(
     console.log(`[worker] Changed files: ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` (+${files.length - 5} more)` : ""}`);
   }
 
-  // 4. Dispatch diff to Secret Agent and Bug Agent concurrently
-  console.log(`[worker] Dispatching to Secret Agent and Bug Agent...`);
-  const [secretScanResult, bugScanResult] = await Promise.all([
-    runSecretScan({
-      octokit,
-      owner: repoOwner,
-      repo: repoShortName,
-      sha,
-      diff: diffContent,
-    }),
-    runBugScan({
-      octokit,
-      owner: repoOwner,
-      repo: repoShortName,
-      sha,
-      diff: diffContent,
-    }),
-  ]);
-
-  // 5. Dispatch to Commit Agent using diff + BugAgent context
-  console.log(`[worker] Dispatching to Commit Agent with BugAgent context...`);
-  const commitResult = await runCommitAgent({
-    octokit,
+  // 4. Execute LangGraph State Graph (SecretAgent, BugAgent, SecurityAgent in parallel -> collision dialogue -> Sonnet Orchestrator)
+  console.log(`[worker] Executing LangGraph orchestrator state graph...`);
+  const graphResult = await gitGuardGraph.invoke({
     owner: repoOwner,
     repo: repoShortName,
     sha,
     diff: diffContent,
-    bugFindings: bugScanResult.bugs,
     pullNumber,
+    octokit,
   });
+
+  console.log(
+    `[worker] LangGraph execution finished. Verdict: ${graphResult.decision}`
+  );
 
   return {
     repo,
@@ -238,12 +220,12 @@ async function processGitHubEvent(
     filesChanged,
     files,
     diffLength: diffContent.length,
-    diffSummary: `diffUrl: ${diffUrl}`,
-    secretScanPassed: secretScanResult.passed,
-    confirmedSecretsCount: secretScanResult.confirmedCount,
-    bugScanPassed: bugScanResult.passed,
-    bugCount: bugScanResult.bugs.length,
-    suggestedCommitMessage: commitResult.commitMessage,
+    decision: graphResult.decision,
+    secretCount: (graphResult.secretFindings || []).filter((s) => s.confirmed).length,
+    bugCount: (graphResult.bugFindings || []).length,
+    securityCount: (graphResult.securityFindings || []).length,
+    dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,
+    suggestedCommitMessage: graphResult.commitMessage,
   };
 }
 
