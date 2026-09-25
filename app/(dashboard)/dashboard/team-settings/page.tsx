@@ -56,14 +56,14 @@ export default async function TeamSettingsPage() {
   );
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* Breadcrumb Navigation */}
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Link href="/dashboard" className="hover:text-foreground transition">
+      <div className="flex items-center gap-2 text-xs text-slate-500">
+        <Link href="/dashboard" className="hover:text-slate-900 font-medium transition-colors">
           Dashboard
         </Link>
         <span>/</span>
-        <span className="text-foreground font-medium">Team Policy &amp; Audit Logs</span>
+        <span className="text-slate-900 font-semibold">Team Policy &amp; Guardrails</span>
       </div>
 
       <TeamPolicyForm

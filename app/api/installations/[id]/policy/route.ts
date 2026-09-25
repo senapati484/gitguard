@@ -108,17 +108,6 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     );
   }
 
-  const quota = await checkInstallationQuota(id);
-  if (quota.plan !== "team") {
-    return NextResponse.json(
-      {
-        error: "Org-Wide Policies and Custom Secret Rules are exclusive to the Team plan. Please upgrade your plan.",
-        upgradeRequired: true,
-      },
-      { status: 403 }
-    );
-  }
-
   try {
     const body = await req.json();
     const newPolicyData: Partial<OrgPolicy> = body.policy || body;

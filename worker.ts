@@ -254,29 +254,26 @@ async function processGitHubEvent(
   // Increment monthly checks counter
   await incrementInstallationCheckCount(installationId, quota.installationDocId);
 
-  // 5. Load Org-Wide Policy for Team plan installations
+  // 5. Load Org-Wide Policy
   let policy: OrgPolicy | undefined = undefined;
-  if (quota.plan === "team") {
+  if (fetchedPolicy && (fetchedPolicy.enabled || quota.plan === "team")) {
     policy = fetchedPolicy;
-    if (policy) {
-      console.log(
-        `[worker] Active Team Policy for installation ${installationId}: ${
-          policy.requiredAgents.length
-        } required agent(s), block threshold ${
-          policy.severityThresholds.blockThreshold
-        }, debateMode: ${policy.debateMode ?? true}, ${
-          policy.customSecretPatterns.length
-        } custom secret rule(s).`
-      );
-    }
+    console.log(
+      `[worker] Active Policy for installation ${installationId}: ${
+        policy.requiredAgents.length
+      } required agent(s), block threshold ${
+        policy.severityThresholds.blockThreshold
+      }, debateMode: ${policy.debateMode ?? true}, ${
+        policy.customSecretPatterns.length
+      } custom secret rule(s).`
+    );
   }
 
   // 6. Execute LangGraph State Graph (gated according to plan tier)
   profiler.markAgentsStart();
+  const effectiveDebateMode = Boolean(policy?.debateMode ?? (quota.plan === "team"));
   console.log(
-    `[worker] Executing LangGraph orchestrator state graph (Plan: ${quota.plan.toUpperCase()}, DebateMode: ${
-      quota.plan === "team" && (policy?.debateMode ?? true)
-    })...`
+    `[worker] Executing LangGraph orchestrator state graph (Plan: ${quota.plan.toUpperCase()}, DebateMode: ${effectiveDebateMode})...`
   );
   const graphResult = await gitGuardGraph.invoke({
     owner: repoOwner,

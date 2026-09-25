@@ -141,12 +141,12 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-8">
       {/* Page Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-5">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            Security & Correctness Dashboard
+          <h1 className="text-2xl font-bold tracking-tight text-slate-950">
+            Security &amp; Correctness Dashboard
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-sm text-slate-600 mt-1">
             Real-time monitoring across all GitHub App installations and automated review runs.
           </p>
         </div>
@@ -154,9 +154,9 @@ export default async function DashboardPage() {
         <div className="flex items-center gap-3">
           <Link
             href="/install"
-            className="inline-flex items-center gap-2 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow transition hover:opacity-90"
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="h-4 w-4 shrink-0" width={16} height={16} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
             Connect Repository
@@ -166,88 +166,89 @@ export default async function DashboardPage() {
 
       {/* Top Stats Overview */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Installations
             </p>
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
           </div>
-          <p className="mt-2 text-3xl font-extrabold text-foreground">{totalInstallations}</p>
-          <p className="text-xs text-muted-foreground mt-1">Authorized GitHub Apps</p>
+          <p className="mt-2 text-3xl font-extrabold text-slate-950">{totalInstallations}</p>
+          <p className="text-xs text-slate-500 mt-1">Authorized GitHub Apps</p>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Health Score
             </p>
             <span
-              className="px-2 py-0.5 rounded text-[11px] font-bold"
+              className="px-2 py-0.5 rounded text-[11px] font-bold border"
               style={{
-                backgroundColor: avgHealthScore >= 90 ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
-                color: avgHealthScore >= 90 ? "#10b981" : "#f59e0b",
+                backgroundColor: avgHealthScore >= 90 ? "#ecfdf5" : "#fffbeb",
+                color: avgHealthScore >= 90 ? "#047857" : "#b45309",
+                borderColor: avgHealthScore >= 90 ? "#a7f3d0" : "#fde68a",
               }}
             >
               {avgHealthScore >= 90 ? "GRADE A" : "GRADE B"}
             </span>
           </div>
-          <p className="mt-2 text-3xl font-extrabold text-foreground">
+          <p className="mt-2 text-3xl font-extrabold text-slate-950">
             {avgHealthScore}
-            <span className="text-base font-normal text-muted-foreground">/100</span>
+            <span className="text-base font-normal text-slate-500">/100</span>
           </p>
-          <p className="text-xs text-muted-foreground mt-1">30-day composite security rubric</p>
+          <p className="text-xs text-slate-500 mt-1">30-day composite security rubric</p>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               PR Checks Analyzed
             </p>
-            <svg className="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="h-4 w-4 text-slate-900 shrink-0" width={16} height={16} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <p className="mt-2 text-3xl font-extrabold text-foreground">{totalRunsAnalyzed}</p>
-          <p className="text-xs text-muted-foreground mt-1">Multi-agent orchestrator runs</p>
+          <p className="mt-2 text-3xl font-extrabold text-slate-950">{totalRunsAnalyzed}</p>
+          <p className="text-xs text-slate-500 mt-1">Multi-agent orchestrator runs</p>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Whitelisted Items
             </p>
-            <span className="h-2 w-2 rounded-full bg-blue-500" />
+            <span className="h-2 w-2 rounded-full bg-slate-900" />
           </div>
-          <p className="mt-2 text-3xl font-extrabold text-foreground">{totalWhitelisted}</p>
-          <p className="text-xs text-muted-foreground mt-1">Exemptions with audited reasons</p>
+          <p className="mt-2 text-3xl font-extrabold text-slate-950">{totalWhitelisted}</p>
+          <p className="text-xs text-slate-500 mt-1">Exemptions with audited reasons</p>
         </div>
       </div>
 
       {/* Installations List & Recent Runs */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-foreground">Repositories & Installations</h2>
-          <span className="text-xs text-muted-foreground">
-            Showing {installations.length} installation(s)
+          <h2 className="text-lg font-bold text-slate-950">Repositories &amp; Installations</h2>
+          <span className="text-xs text-slate-500 font-mono">
+            {installations.length} installation(s) connected
           </span>
         </div>
 
         {installations.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-card/40 p-12 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 mb-4">
-              <svg className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-sm">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-900 mb-4">
+              <svg className="h-6 w-6" width={24} height={24} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
             </div>
-            <h3 className="text-base font-semibold text-foreground">No installations found</h3>
-            <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">
+            <h3 className="text-base font-semibold text-slate-900">No installations connected</h3>
+            <p className="text-sm text-slate-500 mt-1 max-w-sm mx-auto">
               You haven&apos;t connected GitGuard to any GitHub repositories yet. Install the GitHub App to begin scanning PRs.
             </p>
             <div className="mt-6">
               <Link
                 href="/install"
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90"
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 shadow-sm"
               >
                 Install GitGuard on GitHub
               </Link>
@@ -258,63 +259,68 @@ export default async function DashboardPage() {
             {installations.map((inst) => (
               <div
                 key={inst.id}
-                className="rounded-xl border border-border bg-card overflow-hidden shadow-sm hover:border-border/80 transition"
+                className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm hover:border-slate-300 transition-colors"
               >
                 {/* Installation Header */}
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border bg-muted/20 px-6 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 bg-slate-50/70 px-6 py-4">
                   <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
-                      <svg className="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <div className="h-9 w-9 rounded-lg bg-slate-900 flex items-center justify-center text-white shadow-sm shrink-0">
+                      <svg className="h-5 w-5" width={20} height={20} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                       </svg>
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold text-foreground text-base">
-                          {inst.accountLogin}
-                        </h3>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground border border-border">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <a
+                          href={`https://github.com/${inst.accountLogin}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-bold text-slate-950 text-base hover:text-slate-700 transition-colors flex items-center gap-1.5"
+                        >
+                          <span>{inst.accountLogin}</span>
+                          <svg className="w-3.5 h-3.5 opacity-50" width={14} height={14} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-white text-slate-600 border border-slate-200">
                           ID: {inst.installationId}
                         </span>
                         <Link
                           href="/dashboard/pricing"
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider transition hover:opacity-80 ${
-                            inst.plan === "team"
-                              ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                              : inst.plan === "pro"
-                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                              : "bg-muted text-muted-foreground border-border"
-                          }`}
+                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200 transition-colors"
                         >
                           <span>{inst.plan} plan</span>
                           {inst.billingProvider === "marketplace" && (
-                            <span className="text-[9px] text-purple-400 font-bold lowercase">
+                            <span className="text-[9px] text-slate-500 font-bold lowercase">
                               (marketplace)
                             </span>
                           )}
                         </Link>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Status: <span className="text-emerald-400 capitalize">{inst.setupAction}</span> • {inst.totalRuns} total run(s) recorded
+                      <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        <span className="text-emerald-700 font-medium capitalize">{inst.setupAction}</span>
+                        <span>•</span>
+                        <span>{inst.totalRuns} total run(s) recorded</span>
                       </p>
                     </div>
                   </div>
 
                   {/* Health Score Pill & Repo Link */}
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg border border-border bg-card">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white shadow-sm">
                       <div className="text-right">
-                        <p className="text-[10px] font-medium uppercase text-muted-foreground">Health Score</p>
-                        <p className="font-bold text-sm text-foreground">
-                          {inst.healthScore}/100 <span className="text-xs font-semibold" style={{ color: inst.healthColor }}>({inst.healthGrade})</span>
+                        <p className="text-[10px] font-semibold uppercase text-slate-500">Health</p>
+                        <p className="font-bold text-sm text-slate-900">
+                          {inst.healthScore}/100
                         </p>
                       </div>
                       <div
-                        className="h-7 w-7 rounded-full flex items-center justify-center font-bold text-xs"
+                        className="h-7 px-2 rounded font-bold text-xs flex items-center justify-center border"
                         style={{
-                          backgroundColor: `${inst.healthColor}20`,
-                          color: inst.healthColor,
-                          border: `1px solid ${inst.healthColor}40`,
+                          backgroundColor: inst.healthScore >= 90 ? "#ecfdf5" : "#fffbeb",
+                          color: inst.healthScore >= 90 ? "#047857" : "#b45309",
+                          borderColor: inst.healthScore >= 90 ? "#a7f3d0" : "#fde68a",
                         }}
                       >
                         {inst.healthGrade}
@@ -323,10 +329,10 @@ export default async function DashboardPage() {
 
                     <Link
                       href={`/repo/${inst.installationId}`}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 shadow-sm transition-colors"
                     >
-                      View Repo History & Trend
-                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <span>View History &amp; Trend</span>
+                      <svg className="h-3.5 w-3.5" width={14} height={14} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
                     </Link>
@@ -335,36 +341,36 @@ export default async function DashboardPage() {
 
                 {/* Recent Runs Table */}
                 <div className="p-6">
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                    Recent Review Runs & Verdicts
-                  </h4>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+                    Recent Review Runs &amp; Verdicts
+                  </h3>
 
                   {inst.recentRuns.length === 0 ? (
-                    <p className="text-xs text-muted-foreground italic py-3">
-                      No review runs captured yet. Open a pull request in this repository to trigger GitGuard agents.
+                    <p className="text-xs text-slate-500 italic py-3">
+                      No review runs captured yet. Open a pull request or push a commit in this repository to trigger GitGuard agents.
                     </p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs">
                         <thead>
-                          <tr className="border-b border-border/60 text-muted-foreground">
-                            <th className="pb-2 font-medium">Verdict</th>
-                            <th className="pb-2 font-medium">Event / Target</th>
-                            <th className="pb-2 font-medium">Commit SHA</th>
-                            <th className="pb-2 font-medium">Agent Breakdown</th>
-                            <th className="pb-2 font-medium text-right">Analyzed</th>
+                          <tr className="border-b border-slate-200 text-slate-500">
+                            <th className="pb-2.5 font-semibold">Verdict</th>
+                            <th className="pb-2.5 font-semibold">Event / Target</th>
+                            <th className="pb-2.5 font-semibold">Commit SHA</th>
+                            <th className="pb-2.5 font-semibold">Agent Breakdown</th>
+                            <th className="pb-2.5 font-semibold text-right">Analyzed</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-border/40">
+                        <tbody className="divide-y divide-slate-100">
                           {inst.recentRuns.slice(0, 5).map((run) => {
                             const isPass = run.decision === "PASS";
                             const isWarn = run.decision === "WARN";
 
                             const verdictClass = isPass
-                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                               : isWarn
-                              ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
-                              : "bg-red-500/10 text-red-400 border-red-500/20";
+                              ? "bg-amber-50 text-amber-700 border-amber-200"
+                              : "bg-rose-50 text-rose-700 border-rose-200";
 
                             const dateStr = new Date(run.createdAt).toLocaleDateString("en-US", {
                               month: "short",
@@ -374,8 +380,8 @@ export default async function DashboardPage() {
                             });
 
                             return (
-                              <tr key={run.id || run.sha} className="hover:bg-muted/10 transition">
-                                <td className="py-2.5">
+                              <tr key={run.id || run.sha} className="hover:bg-slate-50/70 transition-colors">
+                                <td className="py-3">
                                   <span
                                     className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${verdictClass}`}
                                   >
@@ -383,48 +389,61 @@ export default async function DashboardPage() {
                                   </span>
                                 </td>
 
-                                <td className="py-2.5 font-medium text-foreground">
+                                <td className="py-3 font-semibold text-slate-900">
                                   {run.pullNumber ? (
-                                    <span className="flex items-center gap-1">
-                                      <svg className="h-3.5 w-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <span className="flex items-center gap-1.5">
+                                      <svg className="h-3.5 w-3.5 text-slate-700" width={14} height={14} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                                       </svg>
                                       PR #{run.pullNumber}
                                     </span>
                                   ) : (
-                                    <span className="text-muted-foreground">Push event</span>
+                                    <span className="text-slate-600 font-normal">Push event</span>
                                   )}
                                 </td>
 
-                                <td className="py-2.5 font-mono text-muted-foreground">
-                                  {run.sha ? run.sha.slice(0, 7) : "—"}
+                                <td className="py-3 font-mono text-slate-500">
+                                  {run.sha ? (
+                                    <a
+                                      href={`https://github.com/${inst.accountLogin}/commit/${run.sha}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="hover:text-slate-900 hover:underline"
+                                    >
+                                      {run.sha.slice(0, 7)}
+                                    </a>
+                                  ) : (
+                                    "—"
+                                  )}
                                 </td>
 
-                                <td className="py-2.5">
-                                  <div className="flex items-center gap-2">
+                                <td className="py-3">
+                                  <div className="flex items-center gap-2 flex-wrap">
                                     {(run.secretCount ?? 0) > 0 && (
-                                      <span className="text-red-400 font-medium">
-                                        🔒 {run.secretCount}
+                                      <span className="text-rose-600 font-semibold bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded text-[11px]">
+                                        🔒 {run.secretCount} leak
                                       </span>
                                     )}
                                     {((run.criticalCount ?? 0) + (run.highCount ?? 0)) > 0 && (
-                                      <span className="text-amber-400 font-medium">
-                                        🐛 {(run.criticalCount ?? 0) + (run.highCount ?? 0)}
+                                      <span className="text-amber-700 font-semibold bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded text-[11px]">
+                                        🐛 {(run.criticalCount ?? 0) + (run.highCount ?? 0)} bug
                                       </span>
                                     )}
                                     {run.dialogueTriggered && (
-                                      <span className="text-purple-400 font-medium text-[11px] bg-purple-500/10 px-1.5 py-0.5 rounded">
-                                        🤝 Dialogue
+                                      <span className="text-slate-700 font-medium text-[11px] bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+                                        🤝 Consensus
                                       </span>
                                     )}
                                     {(run.secretCount ?? 0) === 0 &&
                                       ((run.criticalCount ?? 0) + (run.highCount ?? 0)) === 0 && (
-                                        <span className="text-emerald-400">All clear</span>
+                                        <span className="text-emerald-700 font-medium text-[11px]">
+                                          ✓ All checks passed
+                                        </span>
                                       )}
                                   </div>
                                 </td>
 
-                                <td className="py-2.5 text-right text-muted-foreground font-mono">
+                                <td className="py-3 text-right text-slate-500 font-mono text-xs">
                                   {dateStr}
                                 </td>
                               </tr>
@@ -442,73 +461,73 @@ export default async function DashboardPage() {
       </div>
 
       {/* Audit View: .gitguardignore Whitelist Surface */}
-      <div className="rounded-xl border border-border bg-card p-6 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-border pb-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200 pb-4">
           <div>
             <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-blue-500" />
-              <h2 className="text-base font-semibold text-foreground">
+              <span className="h-2 w-2 rounded-full bg-slate-900" />
+              <h2 className="text-base font-bold text-slate-950">
                 .gitguardignore Audit View
               </h2>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <p className="text-xs text-slate-600 mt-0.5">
               Whitelisted files and lines skipped by SecretAgent and BugAgent with verified reasons.
             </p>
           </div>
 
-          <div className="rounded border border-blue-500/20 bg-blue-500/5 px-2.5 py-1 text-[11px] text-blue-400 font-mono">
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-700 font-mono">
             Rule format: &lt;pattern&gt; # reason: &lt;why it is ignored&gt;
           </div>
         </div>
 
         {recentIgnoredAudits.length === 0 ? (
           <div className="py-8 text-center">
-            <p className="text-xs text-muted-foreground">
-              No skipped items found yet. Rules in <code className="text-primary font-mono">.gitguardignore</code> requiring a valid reason (e.g. <code className="text-primary font-mono">tests/** # reason: mock fixture keys</code>) will automatically log their bypass rationale here.
+            <p className="text-xs text-slate-500">
+              No skipped items found yet. Rules in <code className="text-slate-900 font-mono bg-slate-100 px-1 py-0.5 rounded">.gitguardignore</code> requiring a valid reason (e.g. <code className="text-slate-900 font-mono bg-slate-100 px-1 py-0.5 rounded">tests/** # reason: mock fixture keys</code>) will automatically log their bypass rationale here.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-border/60 text-muted-foreground">
-                  <th className="pb-2 font-medium">Agent</th>
-                  <th className="pb-2 font-medium">File & Line</th>
-                  <th className="pb-2 font-medium">Matched Pattern</th>
-                  <th className="pb-2 font-medium">Required Reason String</th>
-                  <th className="pb-2 font-medium text-right">Timestamp</th>
+                <tr className="border-b border-slate-200 text-slate-500">
+                  <th className="pb-2.5 font-semibold">Agent</th>
+                  <th className="pb-2.5 font-semibold">File &amp; Line</th>
+                  <th className="pb-2.5 font-semibold">Matched Pattern</th>
+                  <th className="pb-2.5 font-semibold">Required Reason String</th>
+                  <th className="pb-2.5 font-semibold text-right">Timestamp</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/40">
+              <tbody className="divide-y divide-slate-100">
                 {recentIgnoredAudits.map((audit) => (
-                  <tr key={audit.id || `${audit.file}-${audit.timestamp}`} className="hover:bg-muted/10 transition">
+                  <tr key={audit.id || `${audit.file}-${audit.timestamp}`} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-2.5 font-medium">
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${
                           audit.agent === "SecretAgent"
-                            ? "bg-red-500/10 text-red-400 border border-red-500/20"
-                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                            ? "bg-rose-50 text-rose-700 border-rose-200"
+                            : "bg-amber-50 text-amber-700 border-amber-200"
                         }`}
                       >
                         {audit.agent}
                       </span>
                     </td>
 
-                    <td className="py-2.5 font-mono text-foreground">
+                    <td className="py-2.5 font-mono text-slate-900">
                       {audit.file}{audit.line ? `:${audit.line}` : ""}
                     </td>
 
-                    <td className="py-2.5 font-mono text-muted-foreground">
-                      <span className="bg-muted px-1.5 py-0.5 rounded border border-border/80">
+                    <td className="py-2.5 font-mono text-slate-600">
+                      <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
                         {audit.rulePattern}
                       </span>
                     </td>
 
-                    <td className="py-2.5 font-medium text-foreground max-w-xs truncate">
+                    <td className="py-2.5 font-medium text-slate-800 max-w-xs truncate">
                       &quot;{audit.reason}&quot;
                     </td>
 
-                    <td className="py-2.5 text-right font-mono text-muted-foreground">
+                    <td className="py-2.5 text-right font-mono text-slate-500">
                       {new Date(audit.timestamp).toLocaleDateString("en-US", {
                         month: "short",
                         day: "numeric",
