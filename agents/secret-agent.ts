@@ -26,6 +26,8 @@ import {
   logIgnoredFindingToFirestore,
   type GitGuardIgnoreRule,
 } from "@/lib/gitguard-ignore";
+import type { CustomSecretPattern } from "@/lib/team-policy-types";
+import { generateGitleaksToml } from "@/lib/team-policy";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +61,7 @@ export interface RunSecretScanOptions {
   diff: string;
   installationId?: string | number;
   ignoreRules?: GitGuardIgnoreRule[];
+  customPatterns?: CustomSecretPattern[];
 }
 
 // ── System Prompt for False-Positive Filtering ────────────────────────────────
@@ -119,7 +122,10 @@ async function findGitleaksPath(): Promise<string> {
 /**
  * Shells out to gitleaks against the raw diff and parses the resulting JSON.
  */
-export async function runGitleaksScan(diff: string): Promise<GitleaksFinding[]> {
+export async function runGitleaksScan(
+  diff: string,
+  customPatterns?: CustomSecretPattern[]
+): Promise<GitleaksFinding[]> {
   if (!diff || diff.trim().length === 0) {
     return [];
   }
@@ -127,13 +133,14 @@ export async function runGitleaksScan(diff: string): Promise<GitleaksFinding[]> 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gitguard-diff-"));
   const diffPath = path.join(tempDir, "patch.diff");
   const reportPath = path.join(tempDir, "gitleaks-report.json");
+  const customConfigPath = path.join(tempDir, "gitleaks-custom.toml");
+  const customReportPath = path.join(tempDir, "gitleaks-custom-report.json");
 
   try {
     await fs.writeFile(diffPath, diff, "utf-8");
     const gitleaksBin = await findGitleaksPath();
 
-    // Run gitleaks detect against the diff file
-    // Note: gitleaks exits with 1 when leaks are found, which is expected.
+    // 1. Run standard gitleaks detect against the diff file
     try {
       await execFileAsync(gitleaksBin, [
         "detect",
@@ -148,39 +155,132 @@ export async function runGitleaksScan(diff: string): Promise<GitleaksFinding[]> 
         "1",
       ]);
     } catch (execError: unknown) {
-      // Exit code 1 means leaks found; exit code 0 means clean
       const err = execError as { code?: number; stdout?: string; stderr?: string };
       if (err.code !== 1 && err.code !== 0) {
         console.warn(`[gitleaks] Warning during execution:`, err.stderr || err.stdout || err);
       }
     }
 
-    // Read the report file if produced
+    let allRawFindings: GitleaksFinding[] = [];
+
+    // Read standard report if produced
     try {
       const reportRaw = await fs.readFile(reportPath, "utf-8");
-      if (!reportRaw.trim()) return [];
-      const findings = JSON.parse(reportRaw) as GitleaksFinding[];
-      if (!Array.isArray(findings)) return [];
-
-      // Map patch file lines back to actual repository file paths and real line numbers
-      const diffLineMap = buildDiffLineMap(diff);
-
-      return findings.map((f) => {
-        const mapped = diffLineMap.get(f.StartLine);
-        if (mapped && mapped.filePath) {
-          return {
-            ...f,
-            File: mapped.filePath,
-            StartLine: mapped.targetLine,
-            EndLine: mapped.targetLine,
-          };
-        }
-        return f;
-      });
+      if (reportRaw.trim()) {
+        const findings = JSON.parse(reportRaw) as GitleaksFinding[];
+        if (Array.isArray(findings)) allRawFindings.push(...findings);
+      }
     } catch {
-      // No report produced or empty -> no findings
-      return [];
+      // clean or no report
     }
+
+    // 2. If custom patterns exist from Team policy, compile TOML and run merged gitleaks scan
+    const activeCustom = (customPatterns || []).filter(
+      (p) => p.enabled && p.regex && p.regex.trim().length > 0
+    );
+
+    if (activeCustom.length > 0) {
+      try {
+        const tomlContent = generateGitleaksToml(activeCustom);
+        await fs.writeFile(customConfigPath, tomlContent, "utf-8");
+
+        try {
+          await execFileAsync(gitleaksBin, [
+            "detect",
+            "--no-git",
+            "--source",
+            diffPath,
+            "--config",
+            customConfigPath,
+            "--report-format",
+            "json",
+            "--report-path",
+            customReportPath,
+            "--exit-code",
+            "1",
+          ]);
+        } catch (execErr: unknown) {
+          const err = execErr as { code?: number; stdout?: string; stderr?: string };
+          if (err.code !== 1 && err.code !== 0) {
+            console.warn(`[gitleaks] Custom config notice:`, err.stderr || err.stdout || err);
+          }
+        }
+
+        const customRaw = await fs.readFile(customReportPath, "utf-8").catch(() => "");
+        if (customRaw.trim()) {
+          const customParsed = JSON.parse(customRaw) as GitleaksFinding[];
+          if (Array.isArray(customParsed)) allRawFindings.push(...customParsed);
+        }
+      } catch (customErr) {
+        console.warn("[gitleaks] Notice during custom gitleaks run:", customErr);
+      }
+    }
+
+    // 3. Map patch file lines back to actual repository file paths and real line numbers
+    const diffLineMap = buildDiffLineMap(diff);
+
+    let mappedFindings: GitleaksFinding[] = allRawFindings.map((f) => {
+      const mapped = diffLineMap.get(f.StartLine);
+      if (mapped && mapped.filePath) {
+        return {
+          ...f,
+          File: mapped.filePath,
+          StartLine: mapped.targetLine,
+          EndLine: mapped.targetLine,
+        };
+      }
+      return f;
+    });
+
+    // 4. Direct defense-in-depth: regex scan against added diff lines for custom patterns
+    if (activeCustom.length > 0) {
+      for (const item of Array.from(diffLineMap.values())) {
+        if (!item.content || item.content.trim().length === 0) continue;
+
+        for (const pattern of activeCustom) {
+          try {
+            let rawRe = pattern.regex;
+            let flags = "";
+            if (rawRe.startsWith("(?i)")) {
+              rawRe = rawRe.slice(4);
+              flags += "i";
+            }
+            const rx = new RegExp(rawRe, flags);
+            const m = rx.exec(item.content);
+            if (m) {
+              const matchedSecret = m[pattern.secretGroup ?? 1] || m[0];
+              mappedFindings.push({
+                Description: pattern.description || pattern.name,
+                StartLine: item.targetLine,
+                EndLine: item.targetLine,
+                StartColumn: (m.index ?? 0) + 1,
+                EndColumn: (m.index ?? 0) + 1 + m[0].length,
+                Match: m[0],
+                Secret: matchedSecret,
+                File: item.filePath,
+                RuleID: `custom-${pattern.id}`,
+                Entropy: pattern.entropy || 3.5,
+              });
+            }
+          } catch (rxErr) {
+            console.warn(`[gitleaks] Invalid regex pattern "${pattern.id}":`, rxErr);
+          }
+        }
+      }
+    }
+
+    // 5. Deduplicate findings across both runs
+    const seen = new Set<string>();
+    const deduplicated: GitleaksFinding[] = [];
+    for (const f of mappedFindings) {
+      const key = `${f.File}:${f.StartLine}:${f.RuleID}:${f.Secret}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduplicated.push(f);
+      }
+    }
+
+    return deduplicated;
   } catch (err) {
     console.error("[gitleaks] Error running scan:", err);
     return [];
@@ -337,6 +437,7 @@ export async function runSecretScan({
   diff,
   installationId,
   ignoreRules,
+  customPatterns,
 }: RunSecretScanOptions): Promise<{
   passed: boolean;
   confirmedCount: number;
@@ -345,8 +446,8 @@ export async function runSecretScan({
 }> {
   console.log(`[secret-agent] Running secret scan for ${owner}/${repo} @ ${sha.slice(0, 7)}`);
 
-  // Step 1: Run gitleaks
-  const gitleaksFindings = await runGitleaksScan(diff);
+  // Step 1: Run gitleaks with custom patterns if configured
+  const gitleaksFindings = await runGitleaksScan(diff, customPatterns);
   console.log(`[secret-agent] Gitleaks identified ${gitleaksFindings.length} candidate finding(s)`);
 
   let confirmedSecrets: SecretVerificationResult[] = [];

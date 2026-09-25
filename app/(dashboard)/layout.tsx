@@ -11,6 +11,7 @@ interface DashboardLayoutProps {
 const NAV_LINKS = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/pricing", label: "Plans & Pricing" },
+  { href: "/dashboard/team-settings", label: "Team Policy & Audit" },
   { href: "/dashboard/settings", label: "Alert Settings" },
   { href: "/install", label: "Install" },
 ];

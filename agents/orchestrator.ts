@@ -48,6 +48,7 @@ import {
   checkIsIgnored,
   logIgnoredFindingToFirestore,
 } from "@/lib/gitguard-ignore";
+import type { OrgPolicy } from "@/lib/team-policy-types";
 
 // ── 1. LangGraph State Annotation ─────────────────────────────────────────────
 
@@ -62,6 +63,10 @@ export const GitGuardStateAnnotation = Annotation.Root({
   plan: Annotation<"free" | "pro" | "team">({
     reducer: (curr, next) => next ?? curr ?? "free",
     default: () => "free",
+  }),
+  policy: Annotation<OrgPolicy | undefined>({
+    reducer: (curr, next) => next ?? curr,
+    default: () => undefined,
   }),
 
   // Findings from parallel nodes
@@ -112,7 +117,8 @@ export type GitGuardState = typeof GitGuardStateAnnotation.State;
 async function secretAgentNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
   console.log(`[graph:secret_agent] Running secret detection on diff...`);
   try {
-    const candidates = await runGitleaksScan(state.diff);
+    const customPatterns = state.policy?.customSecretPatterns;
+    const candidates = await runGitleaksScan(state.diff, customPatterns);
     const findings =
       candidates.length > 0
         ? await filterSecretsWithLLM(candidates, state.diff)
@@ -395,26 +401,101 @@ Return a concise synthesis statement.`;
 async function orchestratorNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
   console.log(`[graph:orchestrator_node] Synthesizing final verdict with Sonnet...`);
 
+  const policy = state.policy;
+  const SEVERITY_RANK: Record<string, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+  };
+
+  const blockThresholdStr = policy?.severityThresholds?.blockThreshold?.toLowerCase() || "high";
+  const warnThresholdStr = policy?.severityThresholds?.warnThreshold?.toLowerCase() || "medium";
+  const blockRank = SEVERITY_RANK[blockThresholdStr] || 3;
+  const warnRank = SEVERITY_RANK[warnThresholdStr] || 2;
+  const blockOnSecrets = policy?.severityThresholds?.blockOnSecretLeaks !== false;
+  const minHealthScore = policy?.severityThresholds?.minHealthScoreToPass ?? 75;
+  const requiredAgents = policy?.requiredAgents || [
+    "SecretAgent",
+    "BugAgent",
+    "SecurityAgent",
+    "CommitAgent",
+    "HealthAgent",
+  ];
+
   const confirmedSecrets = (state.secretFindings || []).filter((s) => s.confirmed);
-  const criticalHighBugs = (state.bugFindings || []).filter(
-    (b) => b.severity === "critical" || b.severity === "high"
+  const secretBlocks = blockOnSecrets && confirmedSecrets.length > 0;
+
+  const bugBlockers = (state.bugFindings || []).filter(
+    (b) => (SEVERITY_RANK[b.severity] || 1) >= blockRank
   );
-  // Real-world exploitability gate: Only confirmed exploitable critical/high issues block merge
-  const exploitableSecurityBlockers = (state.securityFindings || []).filter(
-    (s) => s.isExploitable && (s.severity === "critical" || s.severity === "high")
+  const bugWarnings = (state.bugFindings || []).filter(
+    (b) =>
+      (SEVERITY_RANK[b.severity] || 1) >= warnRank &&
+      (SEVERITY_RANK[b.severity] || 1) < blockRank
   );
+
+  const securityBlockers = (state.securityFindings || []).filter((s) => {
+    const rank = SEVERITY_RANK[s.severity] || 1;
+    if (rank >= blockRank) {
+      return blockRank <= 2 ? true : s.isExploitable;
+    }
+    return false;
+  });
+
+  const securityWarnings = (state.securityFindings || []).filter((s) => {
+    const rank = SEVERITY_RANK[s.severity] || 1;
+    return rank >= warnRank && !securityBlockers.includes(s);
+  });
+
+  const seoBlockers = requiredAgents.includes("SEOAgent")
+    ? (state.seoFindings || []).filter(
+        (s) => (SEVERITY_RANK[s.severity] || 1) >= blockRank
+      )
+    : [];
+
+  const seoWarnings = (state.seoFindings || []).filter(
+    (s) =>
+      (SEVERITY_RANK[s.severity] || 1) >= warnRank && !seoBlockers.includes(s)
+  );
+
+  // Projected score penalty for health gate
+  const projectedScore = Math.max(
+    0,
+    100 -
+      confirmedSecrets.length * 30 -
+      ((state.bugFindings || []).filter((b) => b.severity === "critical").length +
+        (state.securityFindings || []).filter((s) => s.severity === "critical").length) *
+        25 -
+      ((state.bugFindings || []).filter((b) => b.severity === "high").length +
+        (state.securityFindings || []).filter((s) => s.severity === "high").length) *
+        15 -
+      ((state.bugFindings || []).filter((b) => b.severity === "medium").length +
+        (state.securityFindings || []).filter((s) => s.severity === "medium").length) *
+        5 -
+      ((state.bugFindings || []).filter((b) => b.severity === "low").length +
+        (state.securityFindings || []).filter((s) => s.severity === "low").length) *
+        2
+  );
+
+  const healthScoreBlocked =
+    policy &&
+    policy.enabled &&
+    projectedScore < minHealthScore &&
+    (bugBlockers.length > 0 || securityBlockers.length > 0 || secretBlocks);
 
   const hasBlockers =
-    confirmedSecrets.length > 0 ||
-    criticalHighBugs.length > 0 ||
-    exploitableSecurityBlockers.length > 0;
+    secretBlocks ||
+    bugBlockers.length > 0 ||
+    securityBlockers.length > 0 ||
+    seoBlockers.length > 0 ||
+    healthScoreBlocked;
 
   const totalWarnings =
-    (state.bugFindings || []).filter((b) => b.severity === "medium" || b.severity === "low").length +
-    (state.securityFindings || []).filter(
-      (s) => !s.isExploitable || s.severity === "medium" || s.severity === "low"
-    ).length +
-    (state.seoFindings || []).filter((s) => s.severity === "high" || s.severity === "medium").length;
+    bugWarnings.length +
+    securityWarnings.length +
+    seoWarnings.length +
+    (!hasBlockers && projectedScore < minHealthScore ? 1 : 0);
 
   const decision: "PASS" | "WARN" | "BLOCK" = hasBlockers
     ? "BLOCK"
@@ -422,7 +503,7 @@ async function orchestratorNode(state: GitGuardState): Promise<Partial<GitGuardS
     ? "WARN"
     : "PASS";
 
-  console.log(`[graph:orchestrator_node] Decision: ${decision}`);
+  console.log(`[graph:orchestrator_node] Decision: ${decision} (Policy: ${policy ? "Custom Org Policy" : "Standard"})`);
 
   // 1. Generate Conventional Commit message
   const commitResult = await generateConventionalCommit(
@@ -444,7 +525,7 @@ ${confirmedSecrets.map((s) => `- ${s.file}:${s.line} — ${s.reason}`).join("\n"
 2. BugAgent: ${(state.bugFindings || []).length} bug(s)
 ${(state.bugFindings || []).map((b) => `- [${b.severity.toUpperCase()}] ${b.file}:${b.line} — ${b.message}`).join("\n") || "None"}
 
-3. SecurityAgent: ${(state.securityFindings || []).length} vulnerability(ies) (${exploitableSecurityBlockers.length} confirmed exploitable blocker(s))
+3. SecurityAgent: ${(state.securityFindings || []).length} vulnerability(ies) (${securityBlockers.length} blocker(s))
 ${
   (state.securityFindings || [])
     .map(
@@ -519,6 +600,11 @@ Structure:
   // Append .gitguardignore notice if any findings were whitelisted
   if (state.ignoredCount && state.ignoredCount > 0 && !finalComment.includes(".gitguardignore")) {
     finalComment += `\n\n> 🛡️ **.gitguardignore**: ${state.ignoredCount} finding(s) matched valid exemption rules with documented justifications and were skipped from merge blocking.`;
+  }
+
+  // Append Org-Wide Policy notice if active
+  if (state.policy && state.policy.enabled && !finalComment.includes("Org-Wide Policy Enforced")) {
+    finalComment += `\n\n> 🏢 **Org-Wide Policy Enforced (Team Tier)**: Block: \`${state.policy.severityThresholds.blockThreshold}\` | Warn: \`${state.policy.severityThresholds.warnThreshold}\` | Min Health: \`${state.policy.severityThresholds.minHealthScoreToPass}%\` | Custom Secret Rules: \`${state.policy.customSecretPatterns?.length || 0}\``;
   }
 
   // 3. Post GitHub Check Runs

@@ -36,6 +36,7 @@ import {
   incrementInstallationCheckCount,
   type PlanTier,
 } from "@/lib/plan-limits";
+import { getInstallationPolicy, type OrgPolicy } from "@/lib/team-policy";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -256,7 +257,16 @@ async function processGitHubEvent(
   // Increment monthly checks counter
   await incrementInstallationCheckCount(installationId, quota.installationDocId);
 
-  // 5. Execute LangGraph State Graph (gated according to plan tier)
+  // 5. Load Org-Wide Policy for Team plan installations
+  let policy: OrgPolicy | undefined = undefined;
+  if (quota.plan === "team") {
+    policy = await getInstallationPolicy(installationId);
+    console.log(
+      `[worker] Active Team Policy for installation ${installationId}: ${policy.requiredAgents.length} required agent(s), block threshold ${policy.severityThresholds.blockThreshold}, ${policy.customSecretPatterns.length} custom secret rule(s).`
+    );
+  }
+
+  // 6. Execute LangGraph State Graph (gated according to plan tier)
   console.log(`[worker] Executing LangGraph orchestrator state graph (Plan: ${quota.plan.toUpperCase()})...`);
   const graphResult = await gitGuardGraph.invoke({
     owner: repoOwner,
@@ -267,6 +277,7 @@ async function processGitHubEvent(
     installationId,
     octokit,
     plan: quota.plan,
+    policy,
   });
 
   console.log(

@@ -215,14 +215,42 @@ export async function fetchGitGuardIgnore(
 export async function logIgnoredFindingToFirestore(
   record: IgnoredAuditRecord
 ): Promise<void> {
+  const ts = record.timestamp || Date.now();
   try {
     await adminDb.collection("ignored_audits").add({
       ...record,
-      timestamp: record.timestamp || Date.now(),
+      timestamp: ts,
     });
     console.log(
       `[gitguard-ignore] Logged whitelisted ${record.agent} finding in ${record.file} (Reason: ${record.reason})`
     );
+
+    // Also record into immutable audit_logs collection
+    try {
+      const { logAuditEvent } = await import("@/lib/audit-log");
+      await logAuditEvent({
+        action: "ignore_applied",
+        actor: {
+          system: true,
+          login: "git-committer",
+        },
+        installationId: record.installationId,
+        repo: record.repo,
+        sha: record.sha,
+        description: `Whitelisted ${record.agent} finding in ${record.file}${record.line ? `:${record.line}` : ""} via rule "${record.rulePattern}" (Reason: ${record.reason})`,
+        details: {
+          agent: record.agent,
+          file: record.file,
+          line: record.line,
+          rulePattern: record.rulePattern,
+          reason: record.reason,
+          findingSummary: record.findingSummary || "Exemption rule matched",
+        },
+        timestamp: ts,
+      });
+    } catch (auditErr) {
+      console.warn("[gitguard-ignore] Notice: audit log write deferred:", auditErr);
+    }
   } catch (err) {
     console.warn(`[gitguard-ignore] Failed to log ignored audit to Firestore:`, err);
   }
