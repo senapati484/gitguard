@@ -10,6 +10,7 @@ interface AutoSolveButtonProps {
   repo?: string;
   initialVerdict?: string;
   secretCount?: number;
+  autoSolved?: boolean;
   size?: "sm" | "md";
 }
 
@@ -20,11 +21,12 @@ export function AutoSolveButton({
   repo,
   initialVerdict = "BLOCK",
   secretCount = 0,
+  autoSolved = false,
   size = "sm",
 }: AutoSolveButtonProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [solved, setSolved] = useState(false);
+  const [solved, setSolved] = useState(autoSolved || false);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [remediationInfo, setRemediationInfo] = useState<{
@@ -86,7 +88,7 @@ export function AutoSolveButton({
           Details
         </button>
 
-        {showModal && remediationInfo && (
+        {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-xs p-4">
             <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
               <div className="flex items-center gap-3">
@@ -105,7 +107,7 @@ export function AutoSolveButton({
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600 font-medium">Repository Health:</span>
                   <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                    {remediationInfo.newScore ?? 100}/100 (Grade {remediationInfo.newGrade ?? "A"})
+                    {remediationInfo?.newScore ?? 100}/100 (Grade {remediationInfo?.newGrade ?? "A+"})
                   </span>
                 </div>
                 <div className="flex justify-between items-center">

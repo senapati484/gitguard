@@ -34,6 +34,8 @@ export interface RepoRunRecord {
   mediumCount?: number;
   lowCount?: number;
   dialogueTriggered?: boolean;
+  autoSolved?: boolean;
+  autoSolvedAt?: number;
   createdAt: number; // Unix timestamp ms
   // SEO & Web Vitals
   seoScore?: number; // 0 - 100

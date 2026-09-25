@@ -505,7 +505,7 @@ export default async function DashboardPage() {
                                 </td>
 
                                 <td className="py-3 text-center">
-                                  {run.decision === "BLOCK" || (run.secretCount ?? 0) > 0 ? (
+                                  {run.decision === "BLOCK" || (run.secretCount ?? 0) > 0 || run.autoSolved ? (
                                     <AutoSolveButton
                                       installationId={inst.installationId}
                                       runId={run.id}
@@ -513,6 +513,7 @@ export default async function DashboardPage() {
                                       repo={targetRepo}
                                       initialVerdict={run.decision}
                                       secretCount={run.secretCount}
+                                      autoSolved={Boolean(run.autoSolved)}
                                       size="sm"
                                     />
                                   ) : (

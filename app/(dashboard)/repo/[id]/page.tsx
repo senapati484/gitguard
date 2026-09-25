@@ -499,7 +499,7 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
                         </td>
 
                         <td className="py-3 px-6 text-center">
-                          {run.decision === "BLOCK" || (run.secretCount ?? 0) > 0 ? (
+                          {run.decision === "BLOCK" || (run.secretCount ?? 0) > 0 || run.autoSolved ? (
                             <AutoSolveButton
                               installationId={id}
                               runId={run.id}
@@ -507,6 +507,7 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
                               repo={run.repo || primaryRepo}
                               initialVerdict={run.decision}
                               secretCount={run.secretCount}
+                              autoSolved={Boolean(run.autoSolved)}
                               size="sm"
                             />
                           ) : (
