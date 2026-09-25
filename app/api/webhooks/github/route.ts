@@ -1,97 +1,84 @@
 import { NextRequest, NextResponse } from "next/server";
-import crypto from "crypto";
+import { verifyWebhookSignature } from "@/lib/verify-webhook";
 
-/**
- * Verifies the GitHub webhook signature using HMAC-SHA256.
- * @see https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
- */
-function verifyGitHubSignature(
-  payload: string,
-  signature: string | null,
-  secret: string
-): boolean {
-  if (!signature) return false;
-
-  const hmac = crypto.createHmac("sha256", secret);
-  const digest = `sha256=${hmac.update(payload).digest("hex")}`;
-
-  // Use timingSafeEqual to prevent timing attacks
-  const sigBuffer = Buffer.from(signature);
-  const digestBuffer = Buffer.from(digest);
-
-  if (sigBuffer.length !== digestBuffer.length) return false;
-  return crypto.timingSafeEqual(sigBuffer, digestBuffer);
+// ---------------------------------------------------------------------------
+// Minimal payload shape – only the fields we need at the routing layer.
+// Individual event handlers will narrow further with their own types.
+// ---------------------------------------------------------------------------
+interface GitHubWebhookPayload {
+  installation?: {
+    id: number;
+    account?: { login?: string; type?: string };
+  };
+  sender?: { login?: string };
+  repository?: { full_name?: string };
+  action?: string;
 }
 
 /**
  * POST /api/webhooks/github
  *
- * Receives and processes incoming GitHub App webhook events.
- * Supported events (expand as needed):
- *   - push
- *   - pull_request
- *   - check_run / check_suite
- *   - installation / installation_repositories
+ * Entry point for all GitHub App webhook deliveries.
+ *
+ * Responsibilities (this file):
+ *   1. Read raw body BEFORE any JSON parsing (signature is over the raw bytes).
+ *   2. Verify X-Hub-Signature-256 via HMAC-SHA256 (constant-time).
+ *   3. Parse X-GitHub-Event and log event type + installation.id.
+ *   4. Return 200 { received: true } — no processing yet.
+ *
+ * @see https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // ── 1. Guard: secret must be present ──────────────────────────────────────
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
-
   if (!secret) {
-    console.error("[webhook] GITHUB_WEBHOOK_SECRET is not configured");
+    console.error("[webhook] GITHUB_WEBHOOK_SECRET is not set");
     return NextResponse.json(
-      { error: "Webhook secret not configured" },
+      { error: "Server misconfiguration" },
       { status: 500 }
     );
   }
 
+  // ── 2. Read raw body (must happen before any framework body-parsing) ───────
   const rawBody = await req.text();
+
+  // ── 3. Extract GitHub delivery headers ────────────────────────────────────
   const signature = req.headers.get("x-hub-signature-256");
-  const event = req.headers.get("x-github-event");
-  const deliveryId = req.headers.get("x-github-delivery");
+  const event = req.headers.get("x-github-event") ?? "unknown";
+  const deliveryId = req.headers.get("x-github-delivery") ?? "unknown";
 
-  // --- Signature Verification ---
-  if (!verifyGitHubSignature(rawBody, signature, secret)) {
-    console.warn(`[webhook] Invalid signature for delivery ${deliveryId}`);
-    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  // ── 4. Verify HMAC-SHA256 signature (constant-time) ───────────────────────
+  const verification = verifyWebhookSignature(rawBody, signature, secret);
+  if (!verification.ok) {
+    console.warn(
+      `[webhook] Rejected delivery="${deliveryId}" event="${event}" reason="${verification.reason}"`
+    );
+    return NextResponse.json(
+      { error: "Unauthorized", detail: verification.reason },
+      { status: 401 }
+    );
   }
 
-  let payload: Record<string, unknown>;
+  // ── 5. Parse JSON payload ─────────────────────────────────────────────────
+  let payload: GitHubWebhookPayload;
   try {
-    payload = JSON.parse(rawBody);
+    payload = JSON.parse(rawBody) as GitHubWebhookPayload;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+    console.warn(`[webhook] Malformed JSON for delivery="${deliveryId}"`);
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  console.log(`[webhook] Received event="${event}" delivery="${deliveryId}"`);
+  // ── 6. Log: event type + installation.id (always, before any routing) ─────
+  const installationId = payload.installation?.id ?? null;
+  console.log(
+    `[webhook] event="${event}" delivery="${deliveryId}" installation_id=${installationId ?? "none"}`
+  );
 
-  // --- Event Routing ---
-  switch (event) {
-    case "push": {
-      // TODO: Handle push events (e.g., trigger repo analysis)
-      break;
-    }
-    case "pull_request": {
-      // TODO: Handle PR events (e.g., run checks on open/sync)
-      break;
-    }
-    case "check_run": {
-      // TODO: Handle check run rerequested events
-      break;
-    }
-    case "installation":
-    case "installation_repositories": {
-      // TODO: Handle app installation lifecycle events
-      break;
-    }
-    default: {
-      console.log(`[webhook] Unhandled event type: "${event}"`);
-    }
-  }
-
+  // ── 7. Return 200 immediately — processing will be added per event later ──
   return NextResponse.json({ received: true }, { status: 200 });
 }
 
-// Reject non-POST requests
+// Reject non-POST requests with a clear error
 export async function GET(): Promise<NextResponse> {
   return NextResponse.json({ error: "Method not allowed" }, { status: 405 });
 }
