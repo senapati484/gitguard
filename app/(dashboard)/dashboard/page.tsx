@@ -5,7 +5,7 @@ import { getSessionUid } from "@/lib/auth-session";
 import { adminDb } from "@/lib/firebase-admin";
 import { calculateHealthScore, type RepoRunRecord } from "@/lib/health-score";
 import { getIgnoredAuditRecords, type IgnoredAuditRecord } from "@/lib/gitguard-ignore";
-import type { PlanTier } from "@/lib/plan-limits";
+import type { PlanTier, BillingProvider } from "@/lib/plan-config";
 
 export const metadata: Metadata = {
   title: "Dashboard | GitGuard",
@@ -18,6 +18,7 @@ interface InstallationWithStats {
   accountLogin?: string;
   setupAction?: string;
   plan: PlanTier;
+  billingProvider?: BillingProvider;
   recentRuns: RepoRunRecord[];
   healthScore: number;
   healthGrade: string;
@@ -53,6 +54,7 @@ export default async function DashboardPage() {
       accountLogin?: string;
       setupAction?: string;
       plan?: PlanTier;
+      billingProvider?: BillingProvider;
     }),
   }));
 
@@ -117,6 +119,7 @@ export default async function DashboardPage() {
         accountLogin: inst.accountLogin || `Installation #${inst.installationId}`,
         setupAction: inst.setupAction || "active",
         plan: (inst.plan as PlanTier) || "free",
+        billingProvider: inst.billingProvider,
         recentRuns: runs,
         healthScore: health.score,
         healthGrade: health.grade,
@@ -287,7 +290,7 @@ export default async function DashboardPage() {
                         </span>
                         <Link
                           href="/dashboard/pricing"
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider transition hover:opacity-80 ${
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider transition hover:opacity-80 ${
                             inst.plan === "team"
                               ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
                               : inst.plan === "pro"
@@ -295,7 +298,12 @@ export default async function DashboardPage() {
                               : "bg-muted text-muted-foreground border-border"
                           }`}
                         >
-                          {inst.plan} plan
+                          <span>{inst.plan} plan</span>
+                          {inst.billingProvider === "marketplace" && (
+                            <span className="text-[9px] text-purple-400 font-bold lowercase">
+                              (marketplace)
+                            </span>
+                          )}
                         </Link>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
@@ -363,7 +371,6 @@ export default async function DashboardPage() {
                           {inst.recentRuns.slice(0, 5).map((run) => {
                             const isPass = run.decision === "PASS";
                             const isWarn = run.decision === "WARN";
-                            const isBlock = run.decision === "BLOCK";
 
                             const verdictClass = isPass
                               ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"

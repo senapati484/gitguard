@@ -44,7 +44,7 @@ export interface IgnoredAuditRecord {
  * Converts a glob pattern (e.g. `tests/**\/*.ts`, `*.mock.js`) into a safe RegExp.
  */
 export function globToRegExp(glob: string): RegExp {
-  let normalized = glob.trim().replace(/^\/+/, "");
+  const normalized = glob.trim().replace(/^\/+/, "");
 
   // Escape special regex chars except * and ?
   let regexStr = normalized

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { getSessionUid } from "@/lib/auth-session";
 import { adminDb } from "@/lib/firebase-admin";
 import {
@@ -77,8 +77,7 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
     ? `${installationData.accountLogin}`
     : `Installation #${id}`;
 
-  // 2. Fetch 30-day runs for this installation
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  // 2. Fetch runs for this installation
   let runs: RepoRunRecord[] = [];
 
   try {
@@ -157,7 +156,6 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
   // Agent counts
   const totalSecrets = runs.reduce((acc, r) => acc + (r.secretCount || 0), 0);
   const totalBugs = runs.reduce((acc, r) => acc + (r.criticalCount || 0) + (r.highCount || 0), 0);
-  const totalWarnings = runs.reduce((acc, r) => acc + (r.mediumCount || 0) + (r.lowCount || 0), 0);
   const dialogueCount = runs.filter((r) => r.dialogueTriggered).length;
 
   return (
@@ -399,7 +397,6 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
                   {runs.slice().reverse().map((run) => {
                     const isPass = run.decision === "PASS";
                     const isWarn = run.decision === "WARN";
-                    const isBlock = run.decision === "BLOCK";
 
                     const verdictStyle = isPass
                       ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"

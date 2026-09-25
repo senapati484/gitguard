@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSignature } from "@/lib/verify-webhook";
 import { enqueueGitHubEvent, type GitHubEventJobData } from "@/lib/queues/github-events";
+import type { GitHubMarketplaceWebhookPayload } from "@/lib/plan-limits";
 
 // ---------------------------------------------------------------------------
 // GitHub Webhook Payload Interfaces
@@ -147,6 +148,61 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         };
 
         await enqueueGitHubEvent(jobData);
+        break;
+      }
+
+      case "marketplace_purchase": {
+        const { handleMarketplacePurchaseEvent } = await import("@/lib/plan-limits");
+        const mpPayload = payload as unknown as GitHubMarketplaceWebhookPayload;
+        const result = await handleMarketplacePurchaseEvent(mpPayload);
+        console.log(
+          `[webhook] Processed marketplace_purchase action="${mpPayload.action}" plan="${result.effectivePlan}" provider="${result.provider}"`
+        );
+        return NextResponse.json({
+          received: true,
+          event: "marketplace_purchase",
+          action: mpPayload.action,
+          plan: result.effectivePlan,
+          provider: result.provider,
+        });
+      }
+
+      case "installation": {
+        const instAction = String(payload.action || "");
+        const instObj = payload.installation as
+          | { id: number; account?: { login: string; id: number; type: string } }
+          | undefined;
+
+        if (instObj?.id && instObj.account) {
+          const { adminDb } = await import("@/lib/firebase-admin");
+          const installRef = adminDb.collection("installations").doc(String(instObj.id));
+
+          // Check if a pre-provisioned marketplace purchase exists for this account
+          const preDoc = await adminDb
+            .collection("installations")
+            .doc(`marketplace_${instObj.account.login.toLowerCase()}`)
+            .get();
+
+          const updateFields: Record<string, unknown> = {
+            installationId: instObj.id,
+            accountLogin: instObj.account.login,
+            accountId: instObj.account.id,
+            accountType: instObj.account.type,
+            setupAction: instAction,
+            updatedAt: Date.now(),
+          };
+
+          if (preDoc.exists && preDoc.data()?.marketplace) {
+            updateFields.marketplace = preDoc.data()!.marketplace;
+            updateFields.plan = preDoc.data()!.plan || "free";
+            updateFields.billingProvider = "marketplace";
+          }
+
+          await installRef.set(updateFields, { merge: true });
+          console.log(
+            `[webhook] Synchronized installation #${instObj.id} for account="${instObj.account.login}"`
+          );
+        }
         break;
       }
 

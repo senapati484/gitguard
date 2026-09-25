@@ -50,7 +50,6 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
   const point = payload[0].payload;
   const isPass = point.verdict === "PASS";
   const isWarn = point.verdict === "WARN";
-  const isBlock = point.verdict === "BLOCK";
 
   const verdictBg = isPass
     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
@@ -99,7 +98,8 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
   );
 }
 
-export function HealthTrendChart({ data, repoName }: HealthTrendChartProps) {
+export function HealthTrendChart({ data, repoName: _repoName }: HealthTrendChartProps) {
+  void _repoName;
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {

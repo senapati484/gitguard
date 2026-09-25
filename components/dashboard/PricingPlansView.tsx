@@ -8,18 +8,13 @@
  */
 
 import React, { useState } from "react";
-import { PLAN_CONFIGS, type PlanTier } from "@/lib/plan-limits";
+import {
+  PLAN_CONFIGS,
+  type PlanTier,
+  type InstallationPlanInfo,
+} from "@/lib/plan-config";
 
-export interface InstallationPlanInfo {
-  id: string;
-  installationId: number | string;
-  accountLogin?: string;
-  plan: PlanTier;
-  monthlyChecksCount: number;
-  monthlyChecksLimit: number;
-  unlimited: boolean;
-  resetMonth: string;
-}
+export type { InstallationPlanInfo };
 
 interface PricingPlansViewProps {
   installations: InstallationPlanInfo[];
@@ -313,9 +308,16 @@ export function PricingPlansView({
             <div className="flex items-center justify-between pt-1">
               <h3 className="font-bold text-lg text-foreground">{proConfig.name}</h3>
               {currentPlan === "pro" && (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  Active Plan
-                </span>
+                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    Active Plan
+                  </span>
+                  {currentInst?.billingProvider === "marketplace" && (
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20" title="Marketplace billing active (prefers over Stripe)">
+                      Marketplace
+                    </span>
+                  )}
+                </div>
               )}
             </div>
 
@@ -388,9 +390,16 @@ export function PricingPlansView({
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-lg text-foreground">{teamConfig.name}</h3>
               {currentPlan === "team" ? (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                  Active Plan
-                </span>
+                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    Active Plan
+                  </span>
+                  {currentInst?.billingProvider === "marketplace" && (
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20" title="Marketplace billing active (prefers over Stripe)">
+                      Marketplace
+                    </span>
+                  )}
+                </div>
               ) : (
                 <span className="text-[10px] font-medium text-muted-foreground">Organizations</span>
               )}

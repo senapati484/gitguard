@@ -40,8 +40,7 @@ export function getGitHubApp() {
  *
  * @param installationId - GitHub App installation ID
  */
-export async function getInstallationClient(_installationId: number) {
-  // const app = getGitHubApp();
-  // return app.getInstallationOctokit(installationId);
+export async function getInstallationClient(installationId?: number) {
+  void installationId;
   throw new Error("TODO: implement getInstallationClient — install @octokit/app first");
 }

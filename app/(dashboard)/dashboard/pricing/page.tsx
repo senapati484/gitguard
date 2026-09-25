@@ -52,6 +52,7 @@ export default async function PricingPage() {
         monthlyChecksLimit: quota.monthlyLimit === Infinity ? 999999 : quota.monthlyLimit,
         unlimited: quota.unlimited,
         resetMonth: quota.resetMonth,
+        billingProvider: quota.billingProvider,
       };
     })
   );
