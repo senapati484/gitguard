@@ -20,6 +20,12 @@ import path from "path";
 import os from "os";
 import type { Octokit } from "@octokit/core";
 import { generateAICompletion } from "@/lib/ai-client";
+import {
+  fetchGitGuardIgnore,
+  checkIsIgnored,
+  logIgnoredFindingToFirestore,
+  type GitGuardIgnoreRule,
+} from "@/lib/gitguard-ignore";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +57,8 @@ export interface RunSecretScanOptions {
   repo: string;
   sha: string;
   diff: string;
+  installationId?: string | number;
+  ignoreRules?: GitGuardIgnoreRule[];
 }
 
 // ── System Prompt for False-Positive Filtering ────────────────────────────────
@@ -327,10 +335,13 @@ export async function runSecretScan({
   repo,
   sha,
   diff,
+  installationId,
+  ignoreRules,
 }: RunSecretScanOptions): Promise<{
   passed: boolean;
   confirmedCount: number;
   results: SecretVerificationResult[];
+  ignoredCount: number;
 }> {
   console.log(`[secret-agent] Running secret scan for ${owner}/${repo} @ ${sha.slice(0, 7)}`);
 
@@ -350,14 +361,49 @@ export async function runSecretScan({
     );
   }
 
-  const passed = confirmedSecrets.length === 0;
+  // Step 3: Filter against .gitguardignore
+  const rules = ignoreRules || (await fetchGitGuardIgnore(octokit, owner, repo, sha));
+  const activeSecrets: SecretVerificationResult[] = [];
+  let ignoredCount = 0;
 
-  // Step 3: Create GitHub Check Run
+  for (const secret of confirmedSecrets) {
+    const ignoreCheck = checkIsIgnored(secret.file, rules);
+    if (ignoreCheck.ignored && ignoreCheck.rule && ignoreCheck.rule.valid) {
+      ignoredCount++;
+      console.log(
+        `[secret-agent] Skipping whitelisted secret in ${secret.file}:${secret.line} (Pattern: ${ignoreCheck.rule.pattern}, Reason: ${ignoreCheck.rule.reason})`
+      );
+      await logIgnoredFindingToFirestore({
+        installationId: installationId || "0",
+        repo: `${owner}/${repo}`,
+        sha,
+        file: secret.file,
+        line: secret.line,
+        agent: "SecretAgent",
+        rulePattern: ignoreCheck.rule.pattern,
+        reason: ignoreCheck.rule.reason,
+        findingSummary: `Whitelisted secret: ${secret.reason}`,
+        timestamp: Date.now(),
+      });
+      continue;
+    }
+    activeSecrets.push(secret);
+  }
+
+  if (ignoredCount > 0) {
+    console.log(`[secret-agent] .gitguardignore whitelisted ${ignoredCount} secret finding(s).`);
+  }
+
+  const passed = activeSecrets.length === 0;
+
+  // Step 4: Create GitHub Check Run
   const checkName = "GitGuard / Secrets";
 
   if (passed) {
     const summary =
-      gitleaksFindings.length > 0
+      ignoredCount > 0
+        ? `GitGuard secret scan passed. (Note: ${ignoredCount} finding(s) whitelisted by .gitguardignore with verified reason).`
+        : gitleaksFindings.length > 0
         ? `Scan completed. Gitleaks flagged ${gitleaksFindings.length} candidate pattern(s), but all were verified as false positives, mock credentials, or test fixtures by AI review.`
         : `GitGuard secret scan passed. No secrets detected in this changeset.`;
 
@@ -377,7 +423,7 @@ export async function runSecretScan({
     console.log(`[secret-agent] Posted SUCCESS check run for ${owner}/${repo} @ ${sha.slice(0, 7)}`);
   } else {
     // Failing check run with annotations
-    const annotations = confirmedSecrets.map((secret) => ({
+    const annotations = activeSecrets.map((secret) => ({
       path: secret.file,
       start_line: secret.line || 1,
       end_line: secret.line || 1,
@@ -386,11 +432,21 @@ export async function runSecretScan({
       message: secret.reason,
     }));
 
-    const markdownList = confirmedSecrets
+    const markdownList = activeSecrets
       .map((s) => `- **\`${s.file}:${s.line}\`**: ${s.reason}`)
       .join("\n");
 
-    const summary = `### 🚨 Confirmed Secret(s) Found\n\nGitGuard detected ${confirmedSecrets.length} confirmed sensitive credential(s) in this commit:\n\n${markdownList}\n\n**Action required:** Revoke and rotate these credentials immediately and remove them from git history.`;
+    const summary = [
+      `### 🚨 Confirmed Secret(s) Found`,
+      `GitGuard detected **${activeSecrets.length}** confirmed sensitive credential(s) in this commit:`,
+      markdownList,
+      `**Action required:** Revoke and rotate these credentials immediately and remove them from git history.`,
+      ignoredCount > 0
+        ? `\n> 🛡️ **.gitguardignore**: ${ignoredCount} secret finding(s) were whitelisted and audited.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
       owner,
@@ -400,7 +456,7 @@ export async function runSecretScan({
       status: "completed",
       conclusion: "failure",
       output: {
-        title: `${confirmedSecrets.length} secret(s) detected`,
+        title: `${activeSecrets.length} secret(s) detected`,
         summary,
         annotations: annotations.slice(0, 50), // GitHub caps annotations at 50 per call
       },
@@ -411,7 +467,8 @@ export async function runSecretScan({
 
   return {
     passed,
-    confirmedCount: confirmedSecrets.length,
+    confirmedCount: activeSecrets.length,
     results: allResults,
+    ignoredCount,
   };
 }

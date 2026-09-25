@@ -104,6 +104,10 @@ GitGuard does not rely on a single generic LLM prompt. Instead, it coordinates s
   2. *Unhandled Promises & Rejections*
   3. *Race Conditions & State Inconsistencies*
   4. *Off-by-One Boundary Errors*
+- **Step 3 (One-Click Suggested Changes)**:
+  - For **high-confidence findings**, BugAgent converts the defect into native **GitHub suggested changes** (```` ```suggestion ```` blocks) posted directly to the Pull Request review comments instead of plain annotations.
+  - Pull request authors can inspect the green diff and commit the fix with a **single click**.
+  - Lower-confidence or informational items remain as check run annotations.
 - **Output**: Posts check run `GitGuard / Bugs`. Critical/high bugs block merges; minor bugs warn without blocking.
 
 ### 3. `SecurityAgent` (`agents/security-agent.ts`)
@@ -131,6 +135,35 @@ GitGuard does not rely on a single generic LLM prompt. Instead, it coordinates s
 - Generates a human-readable PR summary comment and completes the `GitGuard / Orchestrator` Check Run.
 
 ---
+
+## 🛡️ `.gitguardignore` Parsing & Whitelist Auditing
+
+GitGuard implements strict, auditable exemption controls via `.gitguardignore` at the root of monitored repositories:
+
+- **Mandatory Reason String**: Every exemption rule **MUST** include a reason string explaining the business or technical justification:
+  ```gitignore
+  # Format: <glob-pattern> # reason: <why it is ignored>
+  tests/fixtures/** # reason: mock test data with dummy API keys
+  *.mock.ts # reason: local unit test stubs
+  legacy/auth.js # reason: approved backwards compatibility fallback
+  ```
+- **Security Enforcement**: If a rule omits the reason string (e.g. `tests/**`), GitGuard marks it as **INVALID** and **refuses to whitelist the files**, preventing unreviewed security bypasses.
+- **Dashboard Audit View**: Every time `SecretAgent` or `BugAgent` skips a finding due to a valid `.gitguardignore` rule, an audit record is logged to Firestore (`ignored_audits`) and surfaced prominently in the repository dashboard with the exact pattern and documented reason.
+
+---
+
+## 📊 Dashboard & Health Monitoring
+
+- **`app/(dashboard)/dashboard/page.tsx`**:
+  - Lists all installations where the signed-in user is an administrator (`adminUids`).
+  - Displays per-installation 30-day composite health score (0–100, Grade A+ to F).
+  - Summarizes recent review runs with color-coded verdict pills (`PASS`, `WARN`, `BLOCK`) and defect breakdowns.
+  - Includes a global `.gitguardignore` audit view preview.
+- **`app/(dashboard)/repo/[id]/page.tsx`**:
+  - Interactive **Recharts** 30-day health-score trend line (`HealthTrendChart`) showing score trajectory over time.
+  - Per-agent Check Run history (SecretAgent, BugAgent with suggested changes, SecurityAgent SAST, SEOAgent Web Vitals, Consensus Dialogue).
+  - Dedicated **Dashboard Audit View** displaying all whitelisted exemptions, file/line targets, matched glob patterns, and required reasons.
+- **Badges**: Public cached SVG badges via `GET /api/badge/[installationId]/[repo]`.
 
 ## ⚡ Asynchronous Architecture: Webhooks + BullMQ + Upstash
 

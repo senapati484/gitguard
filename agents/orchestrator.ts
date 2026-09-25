@@ -29,6 +29,7 @@ import {
 import {
   extractChangedHunks,
   detectBugsInHunks,
+  postBugSuggestedChanges,
   type BugFinding,
 } from "@/agents/bug-agent";
 import {
@@ -42,6 +43,11 @@ import {
 } from "@/agents/seo-agent";
 import { generateConventionalCommit } from "@/agents/commit-agent";
 import { generateAICompletion } from "@/lib/ai-client";
+import {
+  fetchGitGuardIgnore,
+  checkIsIgnored,
+  logIgnoredFindingToFirestore,
+} from "@/lib/gitguard-ignore";
 
 // ── 1. LangGraph State Annotation ─────────────────────────────────────────────
 
@@ -51,6 +57,7 @@ export const GitGuardStateAnnotation = Annotation.Root({
   sha: Annotation<string>(),
   diff: Annotation<string>(),
   pullNumber: Annotation<number | undefined>(),
+  installationId: Annotation<string | number | undefined>(),
   octokit: Annotation<Octokit>(),
 
   // Findings from parallel nodes
@@ -74,6 +81,10 @@ export const GitGuardStateAnnotation = Annotation.Root({
     reducer: (curr, next) => next ?? curr,
     default: () => undefined,
   }),
+  ignoredCount: Annotation<number | undefined>({
+    reducer: (curr, next) => (next !== undefined ? (curr || 0) + next : curr),
+    default: () => 0,
+  }),
 
   // Dialogue notes between BugAgent and SecurityAgent
   dialogueNotes: Annotation<string[]>({
@@ -92,7 +103,7 @@ export type GitGuardState = typeof GitGuardStateAnnotation.State;
 // ── 2. Graph Nodes ────────────────────────────────────────────────────────────
 
 /**
- * SecretAgent Node: Shells out to gitleaks and uses AI to filter false positives.
+ * SecretAgent Node: Shells out to gitleaks, validates with AI, and applies .gitguardignore.
  */
 async function secretAgentNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
   console.log(`[graph:secret_agent] Running secret detection on diff...`);
@@ -102,8 +113,40 @@ async function secretAgentNode(state: GitGuardState): Promise<Partial<GitGuardSt
       candidates.length > 0
         ? await filterSecretsWithLLM(candidates, state.diff)
         : [];
-    console.log(`[graph:secret_agent] Found ${findings.filter((f) => f.confirmed).length} confirmed secret(s)`);
-    return { secretFindings: findings };
+
+    // Filter against .gitguardignore
+    const rules = await fetchGitGuardIgnore(state.octokit, state.owner, state.repo, state.sha);
+    const activeFindings: SecretVerificationResult[] = [];
+    let ignoredSecrets = 0;
+
+    for (const f of findings) {
+      const ignoreCheck = checkIsIgnored(f.file, rules);
+      if (ignoreCheck.ignored && ignoreCheck.rule && ignoreCheck.rule.valid) {
+        ignoredSecrets++;
+        console.log(
+          `[graph:secret_agent] Whitelisted secret in ${f.file}:${f.line} (Pattern: ${ignoreCheck.rule.pattern}, Reason: ${ignoreCheck.rule.reason})`
+        );
+        await logIgnoredFindingToFirestore({
+          installationId: state.installationId || "0",
+          repo: `${state.owner}/${state.repo}`,
+          sha: state.sha,
+          file: f.file,
+          line: f.line,
+          agent: "SecretAgent",
+          rulePattern: ignoreCheck.rule.pattern,
+          reason: ignoreCheck.rule.reason,
+          findingSummary: `Whitelisted credential: ${f.reason}`,
+          timestamp: Date.now(),
+        });
+        continue;
+      }
+      activeFindings.push(f);
+    }
+
+    console.log(
+      `[graph:secret_agent] Found ${activeFindings.filter((f) => f.confirmed).length} confirmed secret(s) (${ignoredSecrets} whitelisted)`
+    );
+    return { secretFindings: activeFindings, ignoredCount: ignoredSecrets };
   } catch (err) {
     console.error(`[graph:secret_agent] Error scanning secrets:`, err);
     return { secretFindings: [] };
@@ -111,15 +154,68 @@ async function secretAgentNode(state: GitGuardState): Promise<Partial<GitGuardSt
 }
 
 /**
- * BugAgent Node: Analyzes changed hunks for null derefs, unhandled promises, race conditions, off-by-ones.
+ * BugAgent Node: Analyzes changed hunks for software bugs, applies .gitguardignore,
+ * and publishes GitHub suggested changes for high-confidence bugs.
  */
 async function bugAgentNode(state: GitGuardState): Promise<Partial<GitGuardState>> {
   console.log(`[graph:bug_agent] Analyzing changed hunks for software bugs...`);
   try {
     const hunks = extractChangedHunks(state.diff);
-    const findings = hunks.length > 0 ? await detectBugsInHunks(hunks) : [];
-    console.log(`[graph:bug_agent] Found ${findings.length} bug finding(s)`);
-    return { bugFindings: findings };
+    const rawFindings = hunks.length > 0 ? await detectBugsInHunks(hunks) : [];
+
+    // Filter against .gitguardignore
+    const rules = await fetchGitGuardIgnore(state.octokit, state.owner, state.repo, state.sha);
+    const activeBugs: BugFinding[] = [];
+    let ignoredBugs = 0;
+
+    for (const b of rawFindings) {
+      const ignoreCheck = checkIsIgnored(b.file, rules);
+      if (ignoreCheck.ignored && ignoreCheck.rule && ignoreCheck.rule.valid) {
+        ignoredBugs++;
+        console.log(
+          `[graph:bug_agent] Whitelisted bug in ${b.file}:${b.line} (Pattern: ${ignoreCheck.rule.pattern}, Reason: ${ignoreCheck.rule.reason})`
+        );
+        await logIgnoredFindingToFirestore({
+          installationId: state.installationId || "0",
+          repo: `${state.owner}/${state.repo}`,
+          sha: state.sha,
+          file: b.file,
+          line: b.line,
+          agent: "BugAgent",
+          rulePattern: ignoreCheck.rule.pattern,
+          reason: ignoreCheck.rule.reason,
+          findingSummary: `[${b.severity.toUpperCase()}] ${b.message}`,
+          timestamp: Date.now(),
+        });
+        continue;
+      }
+      activeBugs.push(b);
+    }
+
+    // Post high-confidence bug findings as GitHub suggested changes directly to the PR
+    const highConfidenceBugs = activeBugs.filter(
+      (b) =>
+        (b.confidence === "high" || b.severity === "critical" || b.severity === "high") &&
+        Boolean(b.suggestedChange && b.suggestedChange.trim().length > 0)
+    );
+
+    if (highConfidenceBugs.length > 0) {
+      await postBugSuggestedChanges({
+        octokit: state.octokit,
+        owner: state.owner,
+        repo: state.repo,
+        sha: state.sha,
+        pullNumber: state.pullNumber,
+        bugs: highConfidenceBugs,
+      }).catch((err) => {
+        console.warn(`[graph:bug_agent] Notice: could not post inline PR suggestions:`, err);
+      });
+    }
+
+    console.log(
+      `[graph:bug_agent] Found ${activeBugs.length} bug finding(s) (${highConfidenceBugs.length} suggested changes, ${ignoredBugs} whitelisted)`
+    );
+    return { bugFindings: activeBugs, ignoredCount: ignoredBugs };
   } catch (err) {
     console.error(`[graph:bug_agent] Error analyzing bugs:`, err);
     return { bugFindings: [] };
@@ -373,9 +469,32 @@ Structure:
     preferredModel: "sonnet",
   });
 
-  const finalComment =
+  let finalComment =
     prCommentText ||
     `### 🛡️ GitGuard Analysis: ${decision}\n\nVerdict: **${decision}**\n- Secrets: ${confirmedSecrets.length}\n- Bugs: ${(state.bugFindings || []).length}\n- Security: ${(state.securityFindings || []).length}\n- SEO & Web Vitals Score: ${state.seoScore ?? 100}/100 (${(state.seoFindings || []).length} issues)`;
+
+  // Append high-confidence suggested changes if not already included in Sonnet output
+  const highConfidenceSuggestions = (state.bugFindings || []).filter(
+    (b) =>
+      (b.confidence === "high" || b.severity === "critical" || b.severity === "high") &&
+      Boolean(b.suggestedChange && b.suggestedChange.trim().length > 0)
+  );
+
+  if (highConfidenceSuggestions.length > 0 && !finalComment.includes("```suggestion")) {
+    const suggestionBlocks = highConfidenceSuggestions
+      .map(
+        (b) =>
+          `#### 💡 \`${b.file}:${b.line}\` (${b.severity.toUpperCase()})\n${b.message}\n\`\`\`suggestion\n${b.suggestedChange?.trim()}\n\`\`\``
+      )
+      .join("\n\n");
+
+    finalComment += `\n\n---\n### 💡 High-Confidence Suggested Changes\nGitGuard identified one-click fixes for the following defects:\n\n${suggestionBlocks}`;
+  }
+
+  // Append .gitguardignore notice if any findings were whitelisted
+  if (state.ignoredCount && state.ignoredCount > 0 && !finalComment.includes(".gitguardignore")) {
+    finalComment += `\n\n> 🛡️ **.gitguardignore**: ${state.ignoredCount} finding(s) matched valid exemption rules with documented justifications and were skipped from merge blocking.`;
+  }
 
   // 3. Post GitHub Check Runs
   try {

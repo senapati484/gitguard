@@ -208,6 +208,7 @@ async function processGitHubEvent(
     sha,
     diff: diffContent,
     pullNumber,
+    installationId,
     octokit,
   });
 

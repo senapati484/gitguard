@@ -21,10 +21,17 @@
 
 import type { Octokit } from "@octokit/core";
 import { generateAICompletion } from "@/lib/ai-client";
+import {
+  fetchGitGuardIgnore,
+  checkIsIgnored,
+  logIgnoredFindingToFirestore,
+  type GitGuardIgnoreRule,
+} from "@/lib/gitguard-ignore";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type BugSeverity = "critical" | "high" | "medium" | "low";
+export type BugConfidence = "high" | "medium" | "low";
 
 export interface BugFinding {
   file: string;
@@ -32,6 +39,9 @@ export interface BugFinding {
   severity: BugSeverity;
   message: string;
   category?: "null_dereference" | "unhandled_promise" | "race_condition" | "off_by_one";
+  confidence?: BugConfidence;
+  suggestedChange?: string; // Exact replacement code line(s) for GitHub ```suggestion blocks
+  originalCode?: string; // The buggy line(s) being replaced
 }
 
 export interface ChangedHunk {
@@ -49,6 +59,9 @@ export interface RunBugScanOptions {
   repo: string;
   sha: string;
   diff: string;
+  pullNumber?: number;
+  installationId?: string | number;
+  ignoreRules?: GitGuardIgnoreRule[];
 }
 
 // ── System Prompt (Strictly Bug-Scoped) ────────────────────────────────────────
@@ -78,6 +91,11 @@ STRICT PROHIBITIONS (DO NOT FLAG):
 - Only analyze the ADDED / CHANGED lines (lines starting with +) in the provided hunks.
 - If no bugs match the 4 categories, return an empty array [].
 
+CONFIDENCE & SUGGESTED REPLACEMENTS:
+- "confidence": "high" | "medium" | "low".
+- For "high" confidence findings, you MUST provide "suggestedReplacement" with the exact 1-to-few replacement lines of code to fix the defect (do NOT include markdown code fences or backticks in suggestedReplacement, just the clean replacement code).
+- Also provide "originalCode" containing the original code line(s) being replaced.
+
 SEVERITY THRESHOLDS:
 - "critical": Definite runtime crash, fatal uncaught exception, or data corruption in normal execution.
 - "high": Likely runtime failure or unhandled rejection under common user inputs or network failures.
@@ -92,7 +110,11 @@ Return ONLY a valid JSON object with a "bugs" array matching this exact schema:
       "file": "path/to/file.ts",
       "line": 42,
       "severity": "critical" | "high" | "medium" | "low",
-      "message": "Concise, precise explanation of the bug and how to fix it."
+      "confidence": "high" | "medium" | "low",
+      "category": "null_dereference" | "unhandled_promise" | "race_condition" | "off_by_one",
+      "message": "Concise, precise explanation of the bug and how to fix it.",
+      "originalCode": "user.profile.name",
+      "suggestedReplacement": "user?.profile?.name"
     }
   ]
 }`;
@@ -189,7 +211,7 @@ export async function detectBugsInHunks(
     )
     .join("\n\n---\n\n");
 
-  const userPrompt = `Analyze the following changed code hunks for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${formattedHunks}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "message" }] }`;
+    const userPrompt = `Analyze the following changed code hunks for null dereferences, unhandled promises, race conditions, and off-by-one errors:\n\n${formattedHunks}\n\nReturn JSON: { "bugs": [{ "file", "line", "severity", "confidence", "category", "message", "originalCode", "suggestedReplacement" }] }`;
 
   const rawCompletion = await generateAICompletion({
     messages: [
@@ -220,11 +242,35 @@ export async function detectBugsInHunks(
           ? (sev as BugSeverity)
           : "medium";
 
+        const conf = String(b.confidence || "").toLowerCase();
+        const confidence: BugConfidence =
+          conf === "high" || conf === "medium" || conf === "low"
+            ? conf
+            : severity === "critical" || severity === "high"
+            ? "high"
+            : "medium";
+
+        // Clean up suggestion text if wrapped in markdown
+        let suggested = typeof b.suggestedReplacement === "string" ? b.suggestedReplacement : undefined;
+        if (!suggested && typeof b.suggestedChange === "string") {
+          suggested = b.suggestedChange;
+        }
+        if (suggested) {
+          suggested = suggested
+            .replace(/^```[a-z]*\n?/i, "")
+            .replace(/\n?```$/i, "")
+            .trim();
+        }
+
         return {
           file: String(b.file),
           line: Number(b.line) || 1,
           severity,
+          confidence,
+          category: b.category as BugFinding["category"],
           message: String(b.message || "Potential bug detected"),
+          originalCode: typeof b.originalCode === "string" ? b.originalCode : undefined,
+          suggestedChange: suggested || undefined,
         };
       });
   } catch (err) {
@@ -233,14 +279,98 @@ export async function detectBugsInHunks(
   }
 }
 
-// ── 3. Check Run Creation ("GitGuard / Bugs") ──────────────────────────────────
+// ── 3. GitHub Suggested Change Publisher ──────────────────────────────────────
+
+/**
+ * Posts high-confidence bug findings as GitHub suggested changes directly onto the PR.
+ * GitHub native ```suggestion blocks enable repository maintainers to apply and commit
+ * the fix in one click from the PR interface.
+ */
+export async function postBugSuggestedChanges({
+  octokit,
+  owner,
+  repo,
+  sha,
+  pullNumber,
+  bugs,
+}: {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  sha: string;
+  pullNumber?: number;
+  bugs: BugFinding[];
+}): Promise<{ postedCount: number; errors: string[] }> {
+  const highConfidenceBugs = bugs.filter(
+    (b) =>
+      (b.confidence === "high" || b.severity === "critical" || b.severity === "high") &&
+      Boolean(b.suggestedChange && b.suggestedChange.trim().length > 0)
+  );
+
+  if (highConfidenceBugs.length === 0) {
+    return { postedCount: 0, errors: [] };
+  }
+
+  // Resolve target PR number if not provided directly
+  let targetPr = pullNumber;
+  if (!targetPr) {
+    try {
+      const prsResp = await octokit.request("GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", {
+        owner,
+        repo,
+        commit_sha: sha,
+      });
+      if (Array.isArray(prsResp.data) && prsResp.data.length > 0) {
+        targetPr = prsResp.data[0].number;
+      }
+    } catch {
+      // Commit might not be part of open PR
+    }
+  }
+
+  let postedCount = 0;
+  const errors: string[] = [];
+
+  if (targetPr) {
+    for (const bug of highConfidenceBugs) {
+      try {
+        const suggestionBody = `### 🤖 GitGuard BugAgent Suggestion (${bug.severity.toUpperCase()})\n${bug.message}\n\n\`\`\`suggestion\n${bug.suggestedChange?.trim()}\n\`\`\``;
+
+        await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/comments", {
+          owner,
+          repo,
+          pull_number: targetPr,
+          commit_id: sha,
+          path: bug.file,
+          line: bug.line,
+          side: "RIGHT",
+          body: suggestionBody,
+        });
+
+        postedCount++;
+        console.log(
+          `[bug-agent] Posted GitHub suggested change for ${bug.file}:${bug.line} on PR #${targetPr}`
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[bug-agent] Notice: inline PR suggestion on ${bug.file}:${bug.line}: ${msg}`);
+        errors.push(`${bug.file}:${bug.line} - ${msg}`);
+      }
+    }
+  }
+
+  return { postedCount, errors };
+}
+
+// ── 4. Check Run Creation ("GitGuard / Bugs") ──────────────────────────────────
 
 /**
  * Runs the Bug Agent scan:
  *  1. Extracts changed hunks.
  *  2. Evaluates hunks with Groq (Gemini fallback).
- *  3. Posts "GitGuard / Bugs" Check Run with inline annotations.
- *  4. Fails on "critical" / "high", but warns (conclusion: "neutral") on lower severities.
+ *  3. Applies .gitguardignore parsing (skipping whitelisted files/lines and logging reasons).
+ *  4. For high-confidence findings, posts GitHub suggested changes (```suggestion).
+ *  5. Posts "GitGuard / Bugs" Check Run with annotations only for non-high-confidence findings.
  */
 export async function runBugScan({
   octokit,
@@ -248,10 +378,15 @@ export async function runBugScan({
   repo,
   sha,
   diff,
+  pullNumber,
+  installationId,
+  ignoreRules,
 }: RunBugScanOptions): Promise<{
   passed: boolean;
   isWarning: boolean;
   bugs: BugFinding[];
+  ignoredCount: number;
+  suggestionsPosted: number;
 }> {
   console.log(`[bug-agent] Running bug scan for ${owner}/${repo} @ ${sha.slice(0, 7)}`);
 
@@ -271,24 +406,84 @@ export async function runBugScan({
         summary: "Changeset contains no inspectable code hunks.",
       },
     });
-    return { passed: true, isWarning: false, bugs: [] };
+    return { passed: true, isWarning: false, bugs: [], ignoredCount: 0, suggestionsPosted: 0 };
   }
 
-  const bugs = await detectBugsInHunks(hunks);
-  console.log(`[bug-agent] AI identified ${bugs.length} bug finding(s)`);
+  const rawBugs = await detectBugsInHunks(hunks);
+  console.log(`[bug-agent] AI identified ${rawBugs.length} raw bug finding(s)`);
 
-  // Failure threshold: critical or high severities fail the check.
-  // Medium or low severities warn (conclusion: "neutral") instead of blocking.
-  const failingBugs = bugs.filter((b) => b.severity === "critical" || b.severity === "high");
-  const warningBugs = bugs.filter((b) => b.severity === "medium" || b.severity === "low");
+  // Load and apply .gitguardignore rules
+  const rules = ignoreRules || (await fetchGitGuardIgnore(octokit, owner, repo, sha));
+  const activeBugs: BugFinding[] = [];
+  let ignoredCount = 0;
+
+  for (const bug of rawBugs) {
+    const ignoreCheck = checkIsIgnored(bug.file, rules);
+    if (ignoreCheck.ignored && ignoreCheck.rule && ignoreCheck.rule.valid) {
+      ignoredCount++;
+      console.log(
+        `[bug-agent] Skipping whitelisted finding in ${bug.file}:${bug.line} (Pattern: ${ignoreCheck.rule.pattern}, Reason: ${ignoreCheck.rule.reason})`
+      );
+
+      await logIgnoredFindingToFirestore({
+        installationId: installationId || "0",
+        repo: `${owner}/${repo}`,
+        sha,
+        file: bug.file,
+        line: bug.line,
+        agent: "BugAgent",
+        rulePattern: ignoreCheck.rule.pattern,
+        reason: ignoreCheck.rule.reason,
+        findingSummary: `[${bug.severity.toUpperCase()}] ${bug.message}`,
+        timestamp: Date.now(),
+      });
+      continue;
+    }
+    activeBugs.push(bug);
+  }
+
+  if (ignoredCount > 0) {
+    console.log(`[bug-agent] .gitguardignore whitelisted ${ignoredCount} bug finding(s).`);
+  }
+
+  // Partition high-confidence findings with code suggestions vs other findings
+  const highConfidenceBugs = activeBugs.filter(
+    (b) =>
+      (b.confidence === "high" || b.severity === "critical" || b.severity === "high") &&
+      Boolean(b.suggestedChange && b.suggestedChange.trim().length > 0)
+  );
+  // Other findings that will receive plain annotations
+  const annotationBugs = activeBugs.filter((b) => !highConfidenceBugs.includes(b));
+
+  // Post high-confidence findings as GitHub suggested changes
+  let suggestionsPosted = 0;
+  if (highConfidenceBugs.length > 0) {
+    const res = await postBugSuggestedChanges({
+      octokit,
+      owner,
+      repo,
+      sha,
+      pullNumber,
+      bugs: highConfidenceBugs,
+    });
+    suggestionsPosted = res.postedCount;
+  }
+
+  const failingBugs = activeBugs.filter((b) => b.severity === "critical" || b.severity === "high");
+  const warningBugs = activeBugs.filter((b) => b.severity === "medium" || b.severity === "low");
 
   const hasFailingBugs = failingBugs.length > 0;
   const hasOnlyWarnings = !hasFailingBugs && warningBugs.length > 0;
-  const isClean = bugs.length === 0;
+  const isClean = activeBugs.length === 0;
 
   const checkName = "GitGuard / Bugs";
 
   if (isClean) {
+    const summary =
+      ignoredCount > 0
+        ? `GitGuard bug scan passed. (Note: ${ignoredCount} finding(s) whitelisted by .gitguardignore).`
+        : "GitGuard bug scan passed. No null dereferences, unhandled promises, race conditions, or off-by-one errors detected in changed hunks.";
+
     await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
       owner,
       repo,
@@ -298,13 +493,13 @@ export async function runBugScan({
       conclusion: "success",
       output: {
         title: "No bugs detected",
-        summary: "GitGuard bug scan passed. No null dereferences, unhandled promises, race conditions, or off-by-one errors detected in changed hunks.",
+        summary,
       },
     });
     console.log(`[bug-agent] Posted SUCCESS check run for ${owner}/${repo}`);
   } else if (hasFailingBugs) {
-    // Failing Check Run with inline failure annotations
-    const annotations = bugs.map((bug) => ({
+    // High-confidence bugs are posted as suggested changes instead of plain annotations
+    const annotations = annotationBugs.map((bug) => ({
       path: bug.file,
       start_line: bug.line,
       end_line: bug.line,
@@ -316,11 +511,30 @@ export async function runBugScan({
       message: bug.message,
     }));
 
-    const markdownList = bugs
+    const markdownList = activeBugs
       .map((b) => `- **[${b.severity.toUpperCase()}] \`${b.file}:${b.line}\`**: ${b.message}`)
       .join("\n");
 
-    const summary = `### ❌ Bug(s) Exceeded Failure Threshold\n\nGitGuard found **${failingBugs.length}** critical/high severity bug(s) that must be addressed:\n\n${markdownList}`;
+    const suggestedBlocks = highConfidenceBugs
+      .map(
+        (b) =>
+          `#### 💡 \`${b.file}:${b.line}\` (${b.severity.toUpperCase()})\n${b.message}\n\`\`\`suggestion\n${b.suggestedChange}\n\`\`\``
+      )
+      .join("\n\n");
+
+    const summary = [
+      `### ❌ Bug(s) Exceeded Failure Threshold`,
+      `GitGuard found **${failingBugs.length}** critical/high severity bug(s) that must be addressed:`,
+      markdownList,
+      highConfidenceBugs.length > 0
+        ? `\n### 💡 High-Confidence Suggested Changes\nGitGuard converted high-confidence findings into one-click GitHub suggested changes:\n\n${suggestedBlocks}`
+        : "",
+      ignoredCount > 0
+        ? `\n> 🛡️ **.gitguardignore**: ${ignoredCount} finding(s) were whitelisted and audited.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
       owner,
@@ -337,8 +551,8 @@ export async function runBugScan({
     });
     console.log(`[bug-agent] Posted FAILURE check run for ${owner}/${repo}`);
   } else {
-    // Warnings only (below threshold) -> conclusion: "neutral" (warns without failing PR check)
-    const annotations = warningBugs.map((bug) => ({
+    // Warnings only (below threshold) -> conclusion: "neutral"
+    const annotations = annotationBugs.map((bug) => ({
       path: bug.file,
       start_line: bug.line,
       end_line: bug.line,
@@ -351,7 +565,26 @@ export async function runBugScan({
       .map((b) => `- **[${b.severity.toUpperCase()}] \`${b.file}:${b.line}\`**: ${b.message}`)
       .join("\n");
 
-    const summary = `### ⚠️ Notice: Bug Warnings Below Fail Threshold\n\nGitGuard detected **${warningBugs.length}** potential issue(s) of medium/low severity. These are posted as warnings and do not fail the check:\n\n${markdownList}`;
+    const suggestedBlocks = highConfidenceBugs
+      .map(
+        (b) =>
+          `#### 💡 \`${b.file}:${b.line}\`\n${b.message}\n\`\`\`suggestion\n${b.suggestedChange}\n\`\`\``
+      )
+      .join("\n\n");
+
+    const summary = [
+      `### ⚠️ Notice: Bug Warnings Below Fail Threshold`,
+      `GitGuard detected **${warningBugs.length}** potential issue(s) of medium/low severity. These are posted as warnings and do not fail the check:`,
+      markdownList,
+      highConfidenceBugs.length > 0
+        ? `\n### 💡 Suggested Changes\n${suggestedBlocks}`
+        : "",
+      ignoredCount > 0
+        ? `\n> 🛡️ **.gitguardignore**: ${ignoredCount} finding(s) were whitelisted and audited.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
       owner,
@@ -372,6 +605,8 @@ export async function runBugScan({
   return {
     passed: !hasFailingBugs,
     isWarning: hasOnlyWarnings,
-    bugs,
+    bugs: activeBugs,
+    ignoredCount,
+    suggestionsPosted,
   };
 }
