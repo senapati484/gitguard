@@ -30,6 +30,7 @@ import {
 } from "@/lib/queues/github-events";
 import { gitGuardGraph } from "@/agents/orchestrator";
 import { recordRunToFirestore } from "@/agents/health-agent";
+import { sendVerdictAlert } from "@/agents/slack-agent";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -253,6 +254,28 @@ async function processGitHubEvent(
   }).catch((err) => {
     console.warn(`[worker] Failed to record run to Firestore:`, err);
   });
+
+  // Dispatch Email / Slack alert on BLOCK or WARN verdicts
+  if (graphResult.decision === "BLOCK" || graphResult.decision === "WARN") {
+    console.log(
+      `[worker] Verdict is ${graphResult.decision} — dispatching alert notification for ${repo}...`
+    );
+    await sendVerdictAlert({
+      installationId,
+      repo,
+      sha,
+      decision: graphResult.decision,
+      pullNumber,
+      event,
+      summary: graphResult.summaryComment,
+      prComment: graphResult.summaryComment,
+      secretFindings: graphResult.secretFindings,
+      bugFindings: graphResult.bugFindings,
+      securityFindings: graphResult.securityFindings,
+    }).catch((err) => {
+      console.warn(`[worker] Failed to dispatch verdict alert:`, err);
+    });
+  }
 
   return {
     repo,

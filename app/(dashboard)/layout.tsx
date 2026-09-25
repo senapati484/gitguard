@@ -10,6 +10,7 @@ interface DashboardLayoutProps {
 
 const NAV_LINKS = [
   { href: "/dashboard", label: "Overview" },
+  { href: "/dashboard/settings", label: "Alert Settings" },
   { href: "/install", label: "Install" },
 ];
 
