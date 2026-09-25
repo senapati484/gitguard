@@ -29,6 +29,7 @@ import {
   type GitHubEventJobData,
 } from "@/lib/queues/github-events";
 import { runSecretScan } from "@/agents/secret-agent";
+import { runBugScan } from "@/agents/bug-agent";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -40,6 +41,8 @@ interface ProcessedDiffResult {
   diffSummary?: string;
   secretScanPassed?: boolean;
   confirmedSecretsCount?: number;
+  bugScanPassed?: boolean;
+  bugCount?: number;
 }
 
 /**
@@ -195,15 +198,24 @@ async function processGitHubEvent(
     console.log(`[worker] Changed files: ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` (+${files.length - 5} more)` : ""}`);
   }
 
-  // 4. Dispatch diff to Secret Agent for security scanning and check run creation
-  console.log(`[worker] Dispatching to Secret Agent...`);
-  const secretScanResult = await runSecretScan({
-    octokit,
-    owner: repoOwner,
-    repo: repoShortName,
-    sha,
-    diff: diffContent,
-  });
+  // 4. Dispatch diff to Secret Agent and Bug Agent concurrently
+  console.log(`[worker] Dispatching to Secret Agent and Bug Agent...`);
+  const [secretScanResult, bugScanResult] = await Promise.all([
+    runSecretScan({
+      octokit,
+      owner: repoOwner,
+      repo: repoShortName,
+      sha,
+      diff: diffContent,
+    }),
+    runBugScan({
+      octokit,
+      owner: repoOwner,
+      repo: repoShortName,
+      sha,
+      diff: diffContent,
+    }),
+  ]);
 
   return {
     repo,
@@ -215,6 +227,8 @@ async function processGitHubEvent(
     diffSummary: `diffUrl: ${diffUrl}`,
     secretScanPassed: secretScanResult.passed,
     confirmedSecretsCount: secretScanResult.confirmedCount,
+    bugScanPassed: bugScanResult.passed,
+    bugCount: bugScanResult.bugs.length,
   };
 }
 

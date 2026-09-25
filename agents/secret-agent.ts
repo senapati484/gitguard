@@ -19,6 +19,7 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import type { Octokit } from "@octokit/core";
+import { generateAICompletion } from "@/lib/ai-client";
 
 const execFileAsync = promisify(execFile);
 
@@ -259,69 +260,23 @@ ${diffSnippet.slice(0, 3000)}
 
 Evaluate each finding and return the JSON array of { file, line, confirmed, reason }.`;
 
-  // 1. Check for Anthropic API Key (Claude Haiku)
-  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  if (anthropicApiKey) {
-    try {
-      console.log(`[secret-agent] Querying Claude Haiku via Anthropic API...`);
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": anthropicApiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-haiku-20241022",
-          max_tokens: 1024,
-          system: SECRET_REVIEW_SYSTEM_PROMPT,
-          messages: [{ role: "user", content: userPrompt }],
-        }),
-      });
+  // Use Groq API with Gemini fallback
+  console.log(`[secret-agent] Querying AI model (Groq primary, Gemini fallback) to filter false positives...`);
+  const rawCompletion = await generateAICompletion({
+    messages: [
+      { role: "system", content: SECRET_REVIEW_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.1,
+    jsonMode: true,
+  });
 
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.content?.[0]?.text ?? "";
-        return parseLLMJsonResults(text, findings);
-      } else {
-        console.warn(`[secret-agent] Anthropic API failed (${response.status}), falling back to Ollama`);
-      }
-    } catch (err) {
-      console.warn(`[secret-agent] Anthropic request error:`, err);
-    }
+  if (rawCompletion) {
+    return parseLLMJsonResults(rawCompletion, findings);
   }
 
-  // 2. Ollama local endpoint
-  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-  const ollamaModel = process.env.OLLAMA_MODEL || "qwen2.5:0.5b";
-
-  try {
-    console.log(`[secret-agent] Querying local Ollama (${ollamaModel} at ${ollamaBaseUrl})...`);
-    const ollamaResponse = await fetch(`${ollamaBaseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: ollamaModel,
-        stream: false,
-        format: "json",
-        messages: [
-          { role: "system", content: SECRET_REVIEW_SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-      }),
-    });
-
-    if (ollamaResponse.ok) {
-      const data = await ollamaResponse.json();
-      const content = data.message?.content ?? "";
-      return parseLLMJsonResults(content, findings);
-    }
-  } catch (err) {
-    console.warn(`[secret-agent] Ollama local call failed:`, err instanceof Error ? err.message : err);
-  }
-
-  // 3. Fallback: If no LLM is reachable, default to treating all gitleaks findings as confirmed
-  console.log(`[secret-agent] No LLM response; defaulting to raw gitleaks findings`);
+  // Fallback: If no AI is reachable, default to treating all gitleaks findings as confirmed
+  console.log(`[secret-agent] No AI response; defaulting to raw gitleaks findings`);
   return findings.map((f) => ({
     file: f.File,
     line: f.StartLine,
