@@ -23,3 +23,12 @@ export function formatUserHeadline(record: UserActivityRecord): string {
   const emailDomain = parts[1] || "Unknown Domain";
   return `User from ${emailDomain}`;
 }
+
+export function getUserDomain(record: UserActivityRecord): string {
+  const email = record.user?.profile?.email;
+  if (!email && email.includes("@")) {
+    return "unknown";
+  }
+  return email ? email.split("@")[1] || "unknown" : "unknown";
+}
+
