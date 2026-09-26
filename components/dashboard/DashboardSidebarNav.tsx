@@ -131,7 +131,13 @@ export function DashboardSidebarNav({
   const pathname = usePathname() || "";
 
   return (
-    <nav className="flex-1 space-y-1.5 p-3">
+    <nav
+      className={`flex-1 transition-all ${
+        isCollapsed
+          ? "flex flex-col items-center py-4 px-2 space-y-2.5"
+          : "p-3 space-y-1.5"
+      }`}
+    >
       {NAV_ITEMS.map((item) => {
         const isActive = item.exact
           ? pathname === item.href
@@ -142,28 +148,46 @@ export function DashboardSidebarNav({
             key={item.href}
             href={item.href}
             onClick={onItemClick}
-            title={isCollapsed ? item.label : undefined}
+            aria-label={item.label}
             className={[
-              "group relative flex items-center rounded-lg text-sm transition-all outline-none focus-visible:ring-2 focus-visible:ring-slate-900",
+              "group relative flex items-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-slate-900 select-none",
               isCollapsed
-                ? "justify-center p-2.5"
-                : "gap-3 px-3 py-2",
+                ? "w-10 h-10 justify-center rounded-xl mx-auto"
+                : "w-full gap-3 px-3 py-2 text-sm rounded-lg",
               isActive
-                ? "bg-slate-900 text-white font-semibold shadow-sm"
-                : "text-slate-600 hover:text-slate-900 hover:bg-slate-100 font-medium",
+                ? "bg-slate-900 text-white font-semibold shadow-md shadow-slate-950/20 ring-1 ring-slate-900/10"
+                : "text-slate-600 hover:text-slate-950 hover:bg-slate-100 font-medium",
             ].join(" ")}
           >
-            <div className="shrink-0">{item.icon}</div>
+            {/* Active Pill on left edge in collapsed mode */}
+            {isCollapsed && isActive && (
+              <span
+                className="absolute -left-2.5 top-1/2 -translate-y-1/2 w-1 h-5 rounded-r-full bg-slate-900 shadow-sm"
+                aria-hidden="true"
+              />
+            )}
+
+            <div className="shrink-0 flex items-center justify-center">
+              {item.icon}
+            </div>
+
             {!isCollapsed && (
               <span className="whitespace-nowrap transition-opacity duration-200">
                 {item.label}
               </span>
             )}
 
-            {/* Floating Tooltip when collapsed */}
+            {/* Impeccable Floating Tooltip with Pointer Caret when collapsed */}
             {isCollapsed && (
-              <div className="absolute left-full ml-3 hidden group-hover:flex items-center px-2.5 py-1 bg-slate-900 text-white text-xs font-medium rounded-md shadow-xl pointer-events-none z-50 whitespace-nowrap border border-slate-800">
-                {item.label}
+              <div
+                role="tooltip"
+                className="absolute left-[calc(100%+14px)] top-1/2 -translate-y-1/2 hidden group-hover:flex items-center px-3 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-2xl pointer-events-none z-50 whitespace-nowrap border border-slate-800/90"
+              >
+                <div
+                  className="absolute -left-1 top-1/2 -translate-y-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-b border-slate-800/90"
+                  aria-hidden="true"
+                />
+                <span>{item.label}</span>
               </div>
             )}
           </Link>

@@ -15,10 +15,10 @@ export function GitGuardLogo({
   linkHref = "/",
 }: GitGuardLogoProps) {
   const sizeStyles = ({
-  sm: { badge: "w-8 h-8 rounded-lg p-1", img: 22, text: "text-sm", badgeText: "text-[10px]" },
-  md: { badge: "w-9 h-9 rounded-xl p-1.5", img: 26, text: "text-base", badgeText: "text-[11px]" },
-  lg: { badge: "w-11 h-11 rounded-2xl p-2", img: 32, text: "text-lg", badgeText: "text-xs" }
-}[size]) ?? { badge: "w-9 h-9 rounded-xl p-1.5", img: 26, text: "text-base", badgeText: "text-[11px]" };
+    sm: { badge: "w-8 h-8 rounded-lg p-1", img: 22, text: "text-sm", badgeText: "text-[10px]" },
+    md: { badge: "w-10 h-10 rounded-xl p-1.5", img: 26, text: "text-base", badgeText: "text-[11px]" },
+    lg: { badge: "w-12 h-12 rounded-2xl p-2", img: 32, text: "text-lg", badgeText: "text-xs" }
+  }[size]) ?? { badge: "w-10 h-10 rounded-xl p-1.5", img: 26, text: "text-base", badgeText: "text-[11px]" };
 
   const content = (
     <div className={`flex items-center gap-3 group select-none ${className}`}>

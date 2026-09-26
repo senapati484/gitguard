@@ -41,22 +41,36 @@ export function DashboardShell({ uid, children }: DashboardShellProps) {
     });
   };
 
+  // Keyboard shortcut (Cmd+B / Ctrl+B) to toggle sidebar
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleCollapsed();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-50/40 text-slate-900 antialiased selection:bg-slate-900 selection:text-white">
       {/* ── Desktop Sidebar ──────────────────────────────────────────────── */}
       <aside
         className={`hidden md:flex shrink-0 flex-col border-r border-slate-200 bg-white h-full max-h-full overflow-hidden transition-all duration-300 ease-in-out ${
-          isCollapsed ? "w-20" : "w-64"
+          isCollapsed ? "w-[72px]" : "w-64"
         }`}
       >
         {/* Brand Header */}
         <div
-          className={`flex h-16 shrink-0 items-center border-b border-slate-200 ${
-            isCollapsed ? "justify-center px-2" : "justify-between px-5"
+          className={`flex h-16 shrink-0 items-center border-b border-slate-200 transition-all ${
+            isCollapsed ? "justify-center px-0" : "justify-between px-5"
           }`}
         >
           {isCollapsed ? (
-            <GitGuardLogo size="sm" showWordmark={false} linkHref="/" />
+            <div className="flex items-center justify-center">
+              <GitGuardLogo size="md" showWordmark={false} linkHref="/" />
+            </div>
           ) : (
             <GitGuardLogo size="md" showWordmark={true} linkHref="/" />
           )}
@@ -66,7 +80,7 @@ export function DashboardShell({ uid, children }: DashboardShellProps) {
             <button
               type="button"
               onClick={toggleCollapsed}
-              title="Collapse sidebar"
+              title="Collapse sidebar (⌘B)"
               className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors"
             >
               <svg
@@ -92,17 +106,20 @@ export function DashboardShell({ uid, children }: DashboardShellProps) {
         </div>
 
         {/* Sidebar Footer Link & Bottom Expand/Collapse */}
-        <div className="p-3 border-t border-slate-200 shrink-0 space-y-1">
+        <div className="p-3 border-t border-slate-200 shrink-0 space-y-2 flex flex-col items-center">
+          {/* GitHub Repository Link */}
           <a
             href="https://github.com/senapati484/gitguard"
             target="_blank"
             rel="noopener noreferrer"
-            title="GitHub Repository"
-            className={`flex items-center rounded-lg text-xs text-slate-500 hover:text-slate-900 transition-colors hover:bg-slate-50 ${
-              isCollapsed ? "justify-center p-2.5" : "justify-between p-2"
+            title={isCollapsed ? undefined : "GitHub Repository"}
+            className={`group relative flex items-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-slate-900 ${
+              isCollapsed
+                ? "w-10 h-10 justify-center rounded-xl text-slate-600 hover:text-slate-950 hover:bg-slate-100 mx-auto"
+                : "w-full justify-between p-2 rounded-lg text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-50"
             }`}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2.5">
               <svg
                 className="w-4 h-4 shrink-0 text-slate-700"
                 viewBox="0 0 24 24"
@@ -131,15 +148,28 @@ export function DashboardShell({ uid, children }: DashboardShellProps) {
                 />
               </svg>
             )}
+
+            {/* Impeccable Floating Tooltip when collapsed */}
+            {isCollapsed && (
+              <div
+                role="tooltip"
+                className="absolute left-[calc(100%+14px)] top-1/2 -translate-y-1/2 hidden group-hover:flex items-center px-3 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-2xl pointer-events-none z-50 whitespace-nowrap border border-slate-800/90"
+              >
+                <div
+                  className="absolute -left-1 top-1/2 -translate-y-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-b border-slate-800/90"
+                  aria-hidden="true"
+                />
+                <span>GitHub Repository ↗</span>
+              </div>
+            )}
           </a>
 
           {/* Quick Expand Button when collapsed */}
-          {isCollapsed && (
+          {isCollapsed ? (
             <button
               type="button"
               onClick={toggleCollapsed}
-              title="Expand sidebar"
-              className="w-full flex items-center justify-center p-2 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+              className="group relative w-10 h-10 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-950 hover:bg-slate-100 transition-all outline-none focus-visible:ring-2 focus-visible:ring-slate-900 mx-auto"
             >
               <svg
                 className="w-4 h-4"
@@ -154,6 +184,43 @@ export function DashboardShell({ uid, children }: DashboardShellProps) {
                   d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5"
                 />
               </svg>
+              {/* Floating Tooltip */}
+              <div
+                role="tooltip"
+                className="absolute left-[calc(100%+14px)] top-1/2 -translate-y-1/2 hidden group-hover:flex items-center px-3 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-2xl pointer-events-none z-50 whitespace-nowrap border border-slate-800/90"
+              >
+                <div
+                  className="absolute -left-1 top-1/2 -translate-y-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-b border-slate-800/90"
+                  aria-hidden="true"
+                />
+                <span>Expand Sidebar (⌘B)</span>
+              </div>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              className="w-full flex items-center justify-between p-2 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+            >
+              <span className="flex items-center gap-2">
+                <svg
+                  className="w-4 h-4 text-slate-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5"
+                  />
+                </svg>
+                <span>Collapse Sidebar</span>
+              </span>
+              <kbd className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                ⌘B
+              </kbd>
             </button>
           )}
         </div>
