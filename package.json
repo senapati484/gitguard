@@ -30,7 +30,8 @@
     "recharts": "^3.10.1",
     "server-only": "^0.0.1",
     "tailwind-merge": "^3.7.0",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "undici": "^8.11.2"
   },
   "devDependencies": {
     "@types/node": "^20",

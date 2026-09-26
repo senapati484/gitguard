@@ -18,6 +18,67 @@
  */
 import { App } from "@octokit/app";
 import type { Octokit } from "@octokit/core";
+import { Agent, setGlobalDispatcher } from "undici";
+
+// ---------------------------------------------------------------------------
+// Configure global fetch dispatcher with extended connection timeout (45s)
+// to eliminate undici default 10s "Connect Timeout Error (attempted address: api.github.com:443, timeout: 10000ms)"
+// ---------------------------------------------------------------------------
+try {
+  const globalAgent = new Agent({
+    connect: {
+      timeout: 45_000, // 45 seconds instead of 10s default
+    },
+    headersTimeout: 45_000,
+    bodyTimeout: 45_000,
+    keepAliveTimeout: 30_000,
+    keepAliveMaxTimeout: 60_000,
+  });
+  setGlobalDispatcher(globalAgent);
+} catch (e) {
+  console.warn("[github-app] Could not set undici global dispatcher:", e);
+}
+
+/**
+ * Executes an Octokit request with exponential backoff retries for transient
+ * connection timeouts, network drops, or GitHub API gateway errors.
+ */
+export async function octokitRequestWithRetry<T>(
+  requestFn: () => Promise<T>,
+  retries = 3,
+  delayMs = 1500
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await requestFn();
+    } catch (err: any) {
+      attempt++;
+      const msg = err?.message || String(err);
+      const isTransient =
+        msg.includes("Connect Timeout Error") ||
+        msg.includes("connect timeout") ||
+        msg.includes("fetch failed") ||
+        err?.code === "ECONNRESET" ||
+        err?.code === "ETIMEDOUT" ||
+        err?.code === "UND_ERR_CONNECT_TIMEOUT" ||
+        err?.status === 500 ||
+        err?.status === 502 ||
+        err?.status === 503 ||
+        err?.status === 504;
+
+      if (!isTransient || attempt >= retries) {
+        throw err;
+      }
+
+      const backoff = delayMs * Math.pow(2, attempt - 1);
+      console.warn(
+        `[octokit] Transient network issue (${msg}). Retrying in ${backoff}ms (attempt ${attempt}/${retries})...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Module-level singleton — created once, reused across all requests.

@@ -33,6 +33,7 @@ import { getRedisConnection } from "@/lib/redis";
 import {
   getInstallationOctokit,
   getInstallationOctokitWithMeta,
+  octokitRequestWithRetry,
 } from "@/lib/github-app";
 import {
   GITHUB_EVENTS_QUEUE,
@@ -116,33 +117,53 @@ async function processGitHubEvent(
   let files: string[] = [];
   let diffContent = "";
 
-  // 3. Pull diff and changed files via GitHub API (Parallelized for <5s median latency)
+  // 3. Pull diff and changed files via GitHub API (with exponential backoff and patch reconstruction fallback)
   profiler.markDiffStart();
   if (event === "pull_request" && pullNumber) {
     console.log(
-      `[worker] Fetching PR #${pullNumber} files and diff in parallel for ${repo}...`
+      `[worker] Fetching PR #${pullNumber} files for ${repo}...`
     );
 
-    const [filesResp, diffResp] = await Promise.all([
+    const filesResp = await octokitRequestWithRetry(() =>
       octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
         owner: repoOwner,
         repo: repoShortName,
         pull_number: pullNumber,
         per_page: 100,
-      }),
-      octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
-        owner: repoOwner,
-        repo: repoShortName,
-        pull_number: pullNumber,
-        headers: {
-          accept: "application/vnd.github.v3.diff",
-        },
-      }),
-    ]);
+      })
+    );
 
-    files = filesResp.data.map((f: { filename: string }) => f.filename);
+    const pullFiles = filesResp.data ?? [];
+    files = pullFiles.map((f: { filename: string }) => f.filename);
     filesChanged = files.length;
-    diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
+
+    try {
+      const diffResp = await octokitRequestWithRetry(
+        () =>
+          octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+            owner: repoOwner,
+            repo: repoShortName,
+            pull_number: pullNumber,
+            headers: {
+              accept: "application/vnd.github.v3.diff",
+            },
+          }),
+        2,
+        1000
+      );
+      diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
+    } catch (diffErr) {
+      console.warn(
+        `[worker] Raw PR diff fetch failed (${(diffErr as Error).message}). Assembling diff from file patches...`
+      );
+      diffContent = pullFiles
+        .filter((f: any) => f.patch)
+        .map(
+          (f: any) =>
+            `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}`
+        )
+        .join("\n\n");
+    }
   } else {
     // Push event: compare before...sha or inspect commit
     const ZERO_SHA = "0000000000000000000000000000000000000000";
@@ -151,52 +172,90 @@ async function processGitHubEvent(
     if (hasValidBefore) {
       const basehead = `${before}...${sha}`;
       console.log(
-        `[worker] Comparing commits ${basehead} for ${repo} in parallel...`
+        `[worker] Comparing commits ${basehead} for ${repo}...`
       );
 
-      const [compareResp, diffResp] = await Promise.all([
+      const compareResp = await octokitRequestWithRetry(() =>
         octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
           owner: repoOwner,
           repo: repoShortName,
           basehead,
-        }),
-        octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
-          owner: repoOwner,
-          repo: repoShortName,
-          basehead,
-          headers: {
-            accept: "application/vnd.github.v3.diff",
-          },
-        }),
-      ]);
+        })
+      );
 
       const changedFilesList = compareResp.data.files ?? [];
       files = changedFilesList.map((f: { filename: string }) => f.filename);
       filesChanged = files.length;
-      diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
-    } else {
-      console.log(`[worker] Fetching commit ${sha} diff for ${repo} in parallel...`);
 
-      const [commitResp, diffResp] = await Promise.all([
+      try {
+        const diffResp = await octokitRequestWithRetry(
+          () =>
+            octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+              owner: repoOwner,
+              repo: repoShortName,
+              basehead,
+              headers: {
+                accept: "application/vnd.github.v3.diff",
+              },
+            }),
+          2,
+          1000
+        );
+        diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
+      } catch (diffErr) {
+        console.warn(
+          `[worker] Raw compare diff fetch failed (${(diffErr as Error).message}). Assembling diff from file patches...`
+        );
+        diffContent = changedFilesList
+          .filter((f: any) => f.patch)
+          .map(
+            (f: any) =>
+              `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}`
+          )
+          .join("\n\n");
+      }
+    } else {
+      console.log(`[worker] Fetching commit ${sha} for ${repo}...`);
+
+      const commitResp = await octokitRequestWithRetry(() =>
         octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
           owner: repoOwner,
           repo: repoShortName,
           ref: sha,
-        }),
-        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
-          owner: repoOwner,
-          repo: repoShortName,
-          ref: sha,
-          headers: {
-            accept: "application/vnd.github.v3.diff",
-          },
-        }),
-      ]);
+        })
+      );
 
       const changedFilesList = commitResp.data.files ?? [];
       files = changedFilesList.map((f: { filename: string }) => f.filename);
       filesChanged = files.length;
-      diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
+
+      try {
+        const diffResp = await octokitRequestWithRetry(
+          () =>
+            octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+              owner: repoOwner,
+              repo: repoShortName,
+              ref: sha,
+              headers: {
+                accept: "application/vnd.github.v3.diff",
+              },
+            }),
+          2,
+          1000
+        );
+        diffContent = typeof diffResp.data === "string" ? diffResp.data : "";
+      } catch (diffErr) {
+        console.warn(
+          `[worker] Raw commit diff fetch failed (${(diffErr as Error).message}). Assembling diff from file patches...`
+        );
+        diffContent = changedFilesList
+          .filter((f: any) => f.patch)
+          .map(
+            (f: any) =>
+              `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}`
+          )
+          .join("\n\n");
+      }
     }
   }
   profiler.markDiffEnd();
