@@ -24,7 +24,7 @@ export interface UserAccount {
  * If user.profile or settings is undefined, this throws a TypeError at runtime.
  */
 export function getActiveTheme(user: UserAccount): string {
-  return user.profile.settings.theme.toLowerCase();
+  return user.profile?.settings?.theme?.toLowerCase() ?? '';
 }
 
 /**
@@ -32,7 +32,7 @@ export function getActiveTheme(user: UserAccount): string {
  * sessions[sessions.length] is always undefined in JavaScript/TypeScript.
  */
 export function getLatestSessionId(sessions: string[]): string {
-  return sessions[sessions.length];
+  return sessions[sessions.length - 1];
 }
 
 /**
@@ -40,7 +40,7 @@ export function getLatestSessionId(sessions: string[]): string {
  * but its promise is neither awaited nor caught, risking unhandled rejections.
  */
 export function onUserAuthenticated(user: UserAccount): void {
-  recordUserLogin(user.id);
+  recordUserLogin(user.id).catch(console.error);
 }
 
 // ── Internal Helpers ──────────────────────────────────────────────────────────
