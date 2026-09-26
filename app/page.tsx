@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getSessionUid } from "@/lib/auth-session";
+import { GitGuardLogo } from "@/components/brand/GitGuardLogo";
 
 export const metadata = {
   title: "GitGuard — Autonomous Code Security & Review Guardrails for GitHub",
@@ -16,34 +17,7 @@ export default async function HomePage() {
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           {/* Logo Mark */}
-          <Link href="/" className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white shadow-sm shrink-0" style={{ width: "2rem", height: "2rem" }}>
-              <svg
-                className="w-4 h-4 shrink-0"
-                width={16}
-                height={16}
-                style={{ width: "1rem", height: "1rem" }}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"
-                />
-              </svg>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-base tracking-tight text-slate-900">
-                GitGuard
-              </span>
-              <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
-                v1.2
-              </span>
-            </div>
-          </Link>
+          <GitGuardLogo size="md" showWordmark={true} linkHref="/" />
 
           {/* Navigation Links */}
           <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600">

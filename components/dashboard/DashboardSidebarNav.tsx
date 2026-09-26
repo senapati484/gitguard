@@ -119,11 +119,19 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export function DashboardSidebarNav() {
+export interface DashboardSidebarNavProps {
+  isCollapsed?: boolean;
+  onItemClick?: () => void;
+}
+
+export function DashboardSidebarNav({
+  isCollapsed = false,
+  onItemClick,
+}: DashboardSidebarNavProps) {
   const pathname = usePathname() || "";
 
   return (
-    <nav className="flex-1 space-y-1 p-3">
+    <nav className="flex-1 space-y-1.5 p-3">
       {NAV_ITEMS.map((item) => {
         const isActive = item.exact
           ? pathname === item.href
@@ -133,15 +141,31 @@ export function DashboardSidebarNav() {
           <Link
             key={item.href}
             href={item.href}
+            onClick={onItemClick}
+            title={isCollapsed ? item.label : undefined}
             className={[
-              "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900",
+              "group relative flex items-center rounded-lg text-sm transition-all outline-none focus-visible:ring-2 focus-visible:ring-slate-900",
+              isCollapsed
+                ? "justify-center p-2.5"
+                : "gap-3 px-3 py-2",
               isActive
                 ? "bg-slate-900 text-white font-semibold shadow-sm"
                 : "text-slate-600 hover:text-slate-900 hover:bg-slate-100 font-medium",
             ].join(" ")}
           >
-            {item.icon}
-            <span>{item.label}</span>
+            <div className="shrink-0">{item.icon}</div>
+            {!isCollapsed && (
+              <span className="whitespace-nowrap transition-opacity duration-200">
+                {item.label}
+              </span>
+            )}
+
+            {/* Floating Tooltip when collapsed */}
+            {isCollapsed && (
+              <div className="absolute left-full ml-3 hidden group-hover:flex items-center px-2.5 py-1 bg-slate-900 text-white text-xs font-medium rounded-md shadow-xl pointer-events-none z-50 whitespace-nowrap border border-slate-800">
+                {item.label}
+              </div>
+            )}
           </Link>
         );
       })}

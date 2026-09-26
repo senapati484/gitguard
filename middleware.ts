@@ -40,11 +40,13 @@ function isPublic(pathname: string): boolean {
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
 
-  // Pass through public routes and Next.js internals
+  // Pass through public routes, static assets, and Next.js internals
   if (
     isPublic(pathname) ||
     pathname.startsWith("/_next/") ||
-    pathname.startsWith("/favicon")
+    pathname.startsWith("/favicon") ||
+    pathname.startsWith("/images/") ||
+    /\.[a-zA-Z0-9]+$/.test(pathname)
   ) {
     return NextResponse.next();
   }
@@ -68,5 +70,5 @@ export function middleware(req: NextRequest): NextResponse {
 
 export const config = {
   // Run on all routes except static files and Next.js internals
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|images|.*\\..*).*)"],
 };
