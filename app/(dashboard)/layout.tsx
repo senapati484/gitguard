@@ -20,11 +20,11 @@ export default async function DashboardLayout({
   if (!uid) redirect("/login");
 
   return (
-    <div className="flex min-h-screen bg-slate-50/40 text-slate-900 antialiased selection:bg-slate-900 selection:text-white">
+    <div className="flex h-screen max-h-screen overflow-hidden bg-slate-50/40 text-slate-900 antialiased selection:bg-slate-900 selection:text-white">
       {/* Sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white md:flex h-full max-h-full overflow-hidden">
         {/* Brand Header */}
-        <div className="flex h-16 items-center px-5 border-b border-slate-200">
+        <div className="flex h-16 shrink-0 items-center px-5 border-b border-slate-200">
           <Link href="/" className="flex items-center gap-3">
             <div
               className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white shadow-sm shrink-0"
@@ -59,10 +59,12 @@ export default async function DashboardLayout({
         </div>
 
         {/* Navigation */}
-        <DashboardSidebarNav />
+        <div className="flex-1 overflow-y-auto">
+          <DashboardSidebarNav />
+        </div>
 
         {/* Sidebar Footer Link */}
-        <div className="p-4 border-t border-slate-200">
+        <div className="p-4 border-t border-slate-200 shrink-0">
           <a
             href="https://github.com/senapati484/gitguard"
             target="_blank"
@@ -90,8 +92,8 @@ export default async function DashboardLayout({
       </aside>
 
       {/* Main area */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white/90 backdrop-blur-md px-6">
+      <div className="flex flex-1 flex-col h-full min-w-0 overflow-hidden">
+        <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white/95 backdrop-blur-md px-6">
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-medium text-slate-700">Autonomous Guardrails Active</span>
@@ -105,7 +107,7 @@ export default async function DashboardLayout({
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-6 md:p-8">{children}</main>
+        <main className="flex-1 min-w-0 overflow-y-auto p-6 md:p-8">{children}</main>
       </div>
     </div>
   );
