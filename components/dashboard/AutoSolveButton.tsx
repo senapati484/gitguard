@@ -19,8 +19,6 @@ export function AutoSolveButton({
   runId,
   sha,
   repo,
-  initialVerdict = "BLOCK",
-  secretCount = 0,
   autoSolved = false,
   size = "sm",
 }: AutoSolveButtonProps) {

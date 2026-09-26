@@ -36,12 +36,12 @@ try {
   });
   setGlobalDispatcher(globalAgent);
   // Ensure globalThis.fetch uses custom agent with 45s timeout across the app
-  globalThis.fetch = ((input: any, init?: any) => {
-    return undiciFetch(input, {
-      ...init,
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    return undiciFetch(input as string | URL, {
+      ...(init as Record<string, unknown>),
       dispatcher: globalAgent,
-    });
-  }) as any;
+    }) as unknown as Promise<Response>;
+  }) as typeof fetch;
 } catch (e) {
   console.warn("[github-app] Could not set undici global dispatcher:", e);
 }
@@ -59,20 +59,24 @@ export async function octokitRequestWithRetry<T>(
   while (true) {
     try {
       return await requestFn();
-    } catch (err: any) {
+    } catch (err: unknown) {
       attempt++;
-      const msg = err?.message || String(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      const errObj = (typeof err === "object" && err !== null ? err : {}) as {
+        code?: string;
+        status?: number;
+      };
       const isTransient =
         msg.includes("Connect Timeout Error") ||
         msg.includes("connect timeout") ||
         msg.includes("fetch failed") ||
-        err?.code === "ECONNRESET" ||
-        err?.code === "ETIMEDOUT" ||
-        err?.code === "UND_ERR_CONNECT_TIMEOUT" ||
-        err?.status === 500 ||
-        err?.status === 502 ||
-        err?.status === 503 ||
-        err?.status === 504;
+        errObj.code === "ECONNRESET" ||
+        errObj.code === "ETIMEDOUT" ||
+        errObj.code === "UND_ERR_CONNECT_TIMEOUT" ||
+        errObj.status === 500 ||
+        errObj.status === 502 ||
+        errObj.status === 503 ||
+        errObj.status === 504;
 
       if (!isTransient || attempt >= retries) {
         throw err;

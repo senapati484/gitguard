@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ["bullmq", "ioredis"],
+  experimental: {
+    serverComponentsExternalPackages: ["bullmq", "ioredis"],
+  },
 };
 
 export default nextConfig;

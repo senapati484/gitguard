@@ -42,11 +42,11 @@ export async function createSessionCookie(idToken: string): Promise<string> {
  * Uses `checkRevoked: true` to honour sign-out across devices.
  */
 export async function getSessionUid(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!sessionCookie) return null;
-
   try {
+    const cookieStore = cookies();
+    const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    if (!sessionCookie) return null;
+
     const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
     return decoded.uid;
   } catch {

@@ -264,8 +264,9 @@ export async function generateAICompletion(
               break;
             }
           }
-        } catch (err: any) {
-          console.warn(`[ai-client] Groq API request failed on ${currentModel}:`, err?.message || err);
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[ai-client] Groq API request failed on ${currentModel}:`, errMsg);
           if (retryCount < maxRetries) {
             await new Promise((r) => setTimeout(r, 600));
             retryCount++;

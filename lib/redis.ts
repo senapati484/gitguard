@@ -31,7 +31,7 @@ function buildConnection(): IORedis {
     }
   }
 
-  return new IORedis(url, {
+  const client = new IORedis(url, {
     // Required by BullMQ — it handles its own retry logic per job
     maxRetriesPerRequest: null,
     // Don't queue commands when Redis is down; surface errors immediately
@@ -48,6 +48,25 @@ function buildConnection(): IORedis {
       return Math.min(times * 300, 5_000);
     },
   });
+
+  // Handle idle connection drops from Upstash serverless gracefully
+  client.on("error", (err: Error & { code?: string }) => {
+    const msg = err?.message || String(err);
+    const code = err?.code || "";
+    if (
+      code === "ECONNRESET" ||
+      code === "ETIMEDOUT" ||
+      msg.includes("ECONNRESET") ||
+      msg.includes("ETIMEDOUT") ||
+      msg.includes("Stream isn't writeable")
+    ) {
+      // Expected on idle cloud Redis drops; ioredis reconnects automatically via retryStrategy
+      return;
+    }
+    console.warn("[redis] Connection notice:", msg);
+  });
+
+  return client;
 }
 
 // Module-level singleton so a single connection is reused across hot-reloads
