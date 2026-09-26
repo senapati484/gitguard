@@ -36,6 +36,7 @@ export interface SeverityThresholds {
 export interface OrgPolicy {
   enabled: boolean;
   scanOnPush?: boolean; // When false, GitGuard only scans Pull Requests and manual triggers, skipping raw git push commits
+  autoSolveOnBlock?: boolean; // When true, GitGuard autonomously commits & pushes verified fixes directly to GitHub
   requiredAgents: RequiredAgentName[];
   severityThresholds: SeverityThresholds;
   customSecretPatterns: CustomSecretPattern[];
@@ -61,6 +62,7 @@ export const ALL_AGENT_NAMES: RequiredAgentName[] = [
 export const DEFAULT_ORG_POLICY: OrgPolicy = {
   enabled: true,
   scanOnPush: true, // Default to true so all git pushes are inspected for leaks and auto-solved
+  autoSolveOnBlock: true, // Default to true: autonomously apply verified fix and push clean code to GitHub
   debateMode: true,
   maxDebateRounds: 2,
   requiredAgents: ["SecretAgent", "BugAgent", "SecurityAgent", "CommitAgent", "HealthAgent"],

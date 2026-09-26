@@ -48,6 +48,10 @@ import {
 } from "@/lib/plan-limits";
 import { getInstallationPolicy, type OrgPolicy } from "@/lib/team-policy";
 import { PipelineProfiler } from "@/lib/profiler";
+import {
+  autoSolveAndCommitToGitHub,
+  type AutoSolveFixItem,
+} from "@/lib/auto-solve-git";
 
 interface ProcessedDiffResult {
   repo: string;
@@ -342,7 +346,114 @@ async function processGitHubEvent(
     (graphResult.bugFindings || []).filter((b) => b.severity === "low").length +
     (graphResult.securityFindings || []).filter((s) => s.severity === "low").length;
 
-  // Persist run history to Firestore for 30-day health score & badge (storing commit ID, verdict & metrics — NOT full diff)
+  // 7. Autonomous Git Auto-Solve & Push Engine:
+  // When defects with verified fixes are detected, GitGuard does NOT just propose them.
+  // GitGuard autonomously patches the code, commits as GitGuard [bot], and pushes to GitHub!
+  const autoFixes: AutoSolveFixItem[] = [];
+
+  for (const s of graphResult.secretFindings || []) {
+    if (s.confirmed && s.suggestedChange && s.suggestedChange.trim().length > 0) {
+      autoFixes.push({
+        file: s.file,
+        line: s.line,
+        originalCode: s.originalCode || s.secretMatch,
+        suggestedChange: s.suggestedChange,
+        category: "credential-leak",
+        severity: "critical",
+        message: s.reason,
+      });
+    }
+  }
+
+  for (const b of graphResult.bugFindings || []) {
+    if (b.suggestedChange && b.suggestedChange.trim().length > 0) {
+      autoFixes.push({
+        file: b.file,
+        line: b.line,
+        originalCode: b.originalCode,
+        suggestedChange: b.suggestedChange,
+        category: "software-bug",
+        severity: b.severity,
+        message: b.message,
+      });
+    }
+  }
+
+  let autoSolvedCommitSha: string | undefined;
+  let autoSolvedFiles: string[] = [];
+  let targetBranch = "main";
+
+  if (event === "pull_request" && pullNumber) {
+    try {
+      const prResp = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner: repoOwner,
+        repo: repoShortName,
+        pull_number: pullNumber,
+      });
+      targetBranch = prResp.data.head?.ref || "main";
+    } catch {
+      targetBranch = "main";
+    }
+  } else if (job.data.ref) {
+    targetBranch = job.data.ref.replace(/^refs\/heads\//, "");
+  }
+
+  const shouldAutoSolve =
+    autoFixes.length > 0 &&
+    (policy?.autoSolveOnBlock !== false);
+
+  if (shouldAutoSolve) {
+    console.log(
+      `[worker] ⚡ Auto-Solve Engine: Found ${autoFixes.length} actionable fix(es). Autonomously patching and pushing to ${repoOwner}/${repoShortName}@${targetBranch}...`
+    );
+
+    const autoSolveRes = await autoSolveAndCommitToGitHub({
+      octokit,
+      owner: repoOwner,
+      repo: repoShortName,
+      branch: targetBranch,
+      fixes: autoFixes,
+    });
+
+    if (autoSolveRes.success && autoSolveRes.commitSha) {
+      autoSolvedCommitSha = autoSolveRes.commitSha;
+      autoSolvedFiles = autoSolveRes.fixedFiles;
+      console.log(
+        `[worker] 🚀 Auto-Solve Succeeded! Pushed commit ${autoSolvedCommitSha.slice(0, 7)} to GitHub.`
+      );
+
+      // Publish/update Check Run to indicate Auto-Solved & Clean
+      await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
+        owner: repoOwner,
+        repo: repoShortName,
+        name: "GitGuard / Orchestrator",
+        head_sha: sha,
+        status: "completed",
+        conclusion: "success",
+        output: {
+          title: "GitGuard Verdict: PASS (Auto-Solved & Pushed to GitHub)",
+          summary: `### ⚡ GitGuard Autonomous Auto-Solve Completed\n\nGitGuard detected ${autoFixes.length} defect(s) and autonomously applied clean fixes, committed them as \`GitGuard [bot]\`, and pushed them directly to branch \`${targetBranch}\`.\n\n- **Auto-Solved Commit:** [\`${autoSolvedCommitSha.slice(0, 7)}\`](https://github.com/${repoOwner}/${repoShortName}/commit/${autoSolvedCommitSha})\n- **Patched Files:** ${autoSolvedFiles.map((f) => `\`${f}\``).join(", ")}\n- **Status:** Clean & Passing`,
+        },
+      }).catch((crErr) => {
+        console.warn(`[worker] Notice: Could not update check-run with auto-solve status:`, crErr);
+      });
+
+      // If PR, post comment confirming autonomous push
+      if (pullNumber) {
+        await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+          owner: repoOwner,
+          repo: repoShortName,
+          issue_number: pullNumber,
+          body: `### ⚡ GitGuard Autonomous Auto-Solve Applied\n\nGitGuard detected defects and has autonomously applied the verified fixes and pushed commit [\`${autoSolvedCommitSha.slice(0, 7)}\`](https://github.com/${repoOwner}/${repoShortName}/commit/${autoSolvedCommitSha}) directly to \`${targetBranch}\`.\n\nYour branch is now clean and ready to merge!`,
+        }).catch(() => {});
+      }
+    }
+  }
+
+  const isAutoSolved = Boolean(autoSolvedCommitSha);
+  const effectiveDecision = isAutoSolved ? "PASS" : graphResult.decision;
+
+  // Persist run history to Firestore for 30-day health score & badge
   await recordRunToFirestore({
     installationId,
     repo,
@@ -351,38 +462,47 @@ async function processGitHubEvent(
     sha,
     event,
     pullNumber: pullNumber ?? null,
-    decision: graphResult.decision,
-    secretCount: confirmedSecrets.length,
-    criticalCount,
-    highCount,
-    mediumCount,
-    lowCount,
+    decision: effectiveDecision,
+    secretCount: isAutoSolved ? 0 : confirmedSecrets.length,
+    criticalCount: isAutoSolved ? 0 : criticalCount,
+    highCount: isAutoSolved ? 0 : highCount,
+    mediumCount: isAutoSolved ? 0 : mediumCount,
+    lowCount: isAutoSolved ? 0 : lowCount,
     dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,
     seoScore: graphResult.seoScore ?? 100,
     seoDefectCount: (graphResult.seoFindings || []).length,
     commitMessage: graphResult.commitMessage || "",
-    summary: (graphResult.summaryComment || "").slice(0, 300),
+    summary: isAutoSolved
+      ? `⚡ Auto-Solved & Pushed commit ${autoSolvedCommitSha?.slice(0, 7)}: ` + (graphResult.summaryComment || "").slice(0, 200)
+      : (graphResult.summaryComment || "").slice(0, 300),
+    autoSolved: isAutoSolved,
+    autoSolvedAt: isAutoSolved ? Date.now() : undefined,
+    autoSolvedCommitSha,
   }).catch((err) => {
     console.warn(`[worker] Failed to record run to Firestore:`, err);
   });
 
-  // Dispatch Email / Slack alert on BLOCK or WARN verdicts
-  if (graphResult.decision === "BLOCK" || graphResult.decision === "WARN") {
+  // Dispatch Email / Slack alert on BLOCK or WARN verdicts, or when auto-solved
+  if (graphResult.decision === "BLOCK" || graphResult.decision === "WARN" || isAutoSolved) {
     console.log(
-      `[worker] Verdict is ${graphResult.decision} — dispatching alert notification for ${repo}...`
+      `[worker] Verdict is ${effectiveDecision} (autoSolved: ${isAutoSolved}) — dispatching alert notification for ${repo}...`
     );
     await sendVerdictAlert({
       installationId,
       repo,
       sha,
-      decision: graphResult.decision,
+      decision: effectiveDecision,
       pullNumber,
       event,
+      branch: targetBranch,
       summary: graphResult.summaryComment,
       prComment: graphResult.summaryComment,
       secretFindings: graphResult.secretFindings,
       bugFindings: graphResult.bugFindings,
       securityFindings: graphResult.securityFindings,
+      autoSolved: isAutoSolved,
+      autoSolvedCommitSha,
+      autoSolvedFiles,
     }).catch((err) => {
       console.warn(`[worker] Failed to dispatch verdict alert:`, err);
     });
@@ -395,10 +515,10 @@ async function processGitHubEvent(
     filesChanged,
     files,
     diffLength: diffContent.length,
-    decision: graphResult.decision,
-    secretCount: confirmedSecrets.length,
-    bugCount: (graphResult.bugFindings || []).length,
-    securityCount: (graphResult.securityFindings || []).length,
+    decision: effectiveDecision,
+    secretCount: isAutoSolved ? 0 : confirmedSecrets.length,
+    bugCount: isAutoSolved ? 0 : (graphResult.bugFindings || []).length,
+    securityCount: isAutoSolved ? 0 : (graphResult.securityFindings || []).length,
     dialogueTriggered: (graphResult.dialogueNotes || []).length > 0,
     suggestedCommitMessage: graphResult.commitMessage,
   };

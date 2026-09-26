@@ -169,6 +169,9 @@ export async function recordRunToFirestore(
       createdAt: runData.createdAt || Date.now(),
       commitMessage: runData.commitMessage || "",
       summary: runData.summary || "",
+      autoSolved: Boolean(runData.autoSolved),
+      autoSolvedAt: runData.autoSolvedAt ?? null,
+      autoSolvedCommitSha: runData.autoSolvedCommitSha ?? null,
     };
 
     // Save to top-level "runs"

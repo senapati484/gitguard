@@ -45,9 +45,14 @@ export interface VerdictAlertPayload {
   bugFindings?: BugFinding[];
   securityFindings?: SecurityFinding[];
   diffUrl?: string;
+  autoSolved?: boolean;
+  autoSolvedCommitSha?: string;
+  autoSolvedFiles?: string[];
+  branch?: string;
 }
 
 export interface ActionableFinding {
+
   type: "secret" | "bug" | "security";
   severity: "critical" | "high" | "medium" | "low";
   file: string;
@@ -290,11 +295,14 @@ export function buildAlertEmailHtml(
   findings: ActionableFinding[],
   recipient: string
 ): string {
-  const { repo, sha, decision, pullNumber, event } = payload;
+  const { repo, sha, decision, pullNumber, event, autoSolved, autoSolvedCommitSha, branch } = payload;
   const isBlock = decision === "BLOCK";
   const shortSha = sha.slice(0, 7);
+  const targetBranch = branch || "main";
 
-  const statusBadge = isBlock
+  const statusBadge = autoSolved && autoSolvedCommitSha
+    ? `<span style="display: inline-block; background: #059669; color: #ffffff; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">✔ AUTO-SOLVED &amp; PUSHED</span>`
+    : isBlock
     ? `<span style="display: inline-block; background: #000000; color: #ffffff; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">● BLOCK</span>`
     : decision === "WARN"
     ? `<span style="display: inline-block; background: #ffffff; color: #000000; border: 1.5px solid #000000; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">▲ WARN</span>`
@@ -302,6 +310,8 @@ export function buildAlertEmailHtml(
 
   const prOrCommitUrl = pullNumber
     ? `https://github.com/${repo}/pull/${pullNumber}`
+    : autoSolvedCommitSha
+    ? `https://github.com/${repo}/commit/${autoSolvedCommitSha}`
     : `https://github.com/${repo}/commit/${sha}`;
 
   const findingsHtml = findings
@@ -318,8 +328,15 @@ export function buildAlertEmailHtml(
       const codeFixHtml = f.suggestedChange
         ? `
           <div style="margin-top: 12px; background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: #f8fafc; overflow-x: auto;">
-            <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 700; letter-spacing: 0.06em; margin-bottom: 8px;">
-              ⚡ Proposed Auto-Fix Solution
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 10px; text-transform: uppercase; color: ${autoSolvedCommitSha ? "#4ade80" : "#94a3b8"}; font-weight: 700; letter-spacing: 0.06em;">
+                ${autoSolvedCommitSha ? "⚡ Applied &amp; Pushed to GitHub by GitGuard [bot]" : "⚡ Verified Auto-Solve Fix"}
+              </span>
+              ${
+                autoSolvedCommitSha
+                  ? `<a href="https://github.com/${repo}/commit/${autoSolvedCommitSha}" style="font-size: 10px; color: #38bdf8; text-decoration: underline;" target="_blank">commit: ${autoSolvedCommitSha.slice(0, 7)} ↗</a>`
+                  : ""
+              }
             </div>
             ${
               f.originalCode
@@ -330,6 +347,10 @@ export function buildAlertEmailHtml(
           </div>
         `
         : "";
+
+      const remediationHtml = autoSolved && autoSolvedCommitSha
+        ? `<span style="color: #059669; font-weight: 600;">✅ Clean fix autonomously applied and pushed to GitHub as <strong>GitGuard [bot]</strong> in commit <a href="https://github.com/${repo}/commit/${autoSolvedCommitSha}" style="color: #059669; text-decoration: underline;" target="_blank">${autoSolvedCommitSha.slice(0, 7)}</a>. Branch <code>${escapeHtml(targetBranch)}</code> is now completely clean and passing. No manual action required!</span>`
+        : escapeHtml(f.nextAction);
 
       return `
         <div style="border: 1px solid #e5e5e5; border-radius: 8px; margin-bottom: 16px; background-color: #ffffff; overflow: hidden;">
@@ -358,11 +379,11 @@ export function buildAlertEmailHtml(
             ${codeFixHtml}
 
             <!-- Remediation Action Callout -->
-            <div style="margin-top: 12px; background: #fafafa; border-left: 3px solid #000000; padding: 10px 12px; font-size: 12px; color: #171717; line-height: 1.55;">
-              <span style="font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; color: #525252; display: block; margin-bottom: 2px;">
-                Remediation Step
+            <div style="margin-top: 12px; background: ${autoSolved ? "#f0fdf4" : "#fafafa"}; border-left: 3px solid ${autoSolved ? "#059669" : "#000000"}; padding: 10px 12px; font-size: 12px; color: #171717; line-height: 1.55;">
+              <span style="font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; color: ${autoSolved ? "#059669" : "#525252"}; display: block; margin-bottom: 2px;">
+                ${autoSolved ? "Autonomous Remediation Status" : "Remediation Step"}
               </span>
-              ${escapeHtml(f.nextAction)}
+              ${remediationHtml}
             </div>
           </div>
         </div>
@@ -370,13 +391,23 @@ export function buildAlertEmailHtml(
     })
     .join("");
 
+  const bannerTitle = autoSolved && autoSolvedCommitSha
+    ? "Defects Autonomously Solved &amp; Pushed to GitHub"
+    : isBlock
+    ? "Merge Blocked — Critical Defects Detected"
+    : "Review Recommended — Quality Regressions Detected";
+
+  const bannerSubtitle = autoSolved && autoSolvedCommitSha
+    ? `GitGuard detected defects on commit <code>${shortSha}</code>, automatically applied clean fixes, committed as <strong>GitGuard [bot]</strong>, and pushed commit <a href="https://github.com/${repo}/commit/${autoSolvedCommitSha}" style="color: #059669; font-weight: 700; text-decoration: underline;" target="_blank"><code>${autoSolvedCommitSha.slice(0, 7)}</code></a> directly to branch <strong>${escapeHtml(targetBranch)}</strong>.`
+    : `Automated verification for repository <strong style="color: #000000;">${repo}</strong> on ${event || "push"} event.`;
+
   return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GitGuard Alert: ${decision} for ${repo}</title>
+  <title>GitGuard Alert: ${autoSolved ? "AUTO-SOLVED" : decision} for ${repo}</title>
 </head>
 <body style="margin: 0; padding: 24px 12px; background-color: #fafafa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0a0a0a;">
   <div style="max-width: 620px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; border: 1px solid #e5e5e5; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
@@ -401,7 +432,7 @@ export function buildAlertEmailHtml(
         </td>
         <td align="right" style="vertical-align: middle;">
           <a href="${prOrCommitUrl}" style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #f5f5f5; border: 1px solid #e5e5e5; padding: 4px 8px; border-radius: 4px; color: #171717; text-decoration: none;" target="_blank">
-            ${pullNumber ? `PR #${pullNumber}` : `sha: ${shortSha}`} ↗
+            ${autoSolvedCommitSha ? `clean: ${autoSolvedCommitSha.slice(0, 7)}` : pullNumber ? `PR #${pullNumber}` : `sha: ${shortSha}`} ↗
           </a>
         </td>
       </tr>
@@ -413,10 +444,10 @@ export function buildAlertEmailHtml(
         ${statusBadge}
       </div>
       <h1 style="margin: 0 0 8px 0; font-size: 19px; font-weight: 700; color: #000000; letter-spacing: -0.02em; line-height: 1.3;">
-        ${isBlock ? "Merge Blocked — Critical Defects Detected" : "Review Recommended — Quality Regressions Detected"}
+        ${bannerTitle}
       </h1>
       <p style="margin: 0; font-size: 13px; color: #525252; line-height: 1.5;">
-        Automated verification for repository <strong style="color: #000000;">${repo}</strong> on ${event || "push"} event.
+        ${bannerSubtitle}
       </p>
     </div>
 
@@ -425,21 +456,20 @@ export function buildAlertEmailHtml(
       <tr>
         <td style="padding: 14px 18px; border-right: 1px solid #e5e5e5; width: 33.33%;">
           <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #737373; margin-bottom: 4px;">Status</div>
-          <div style="font-size: 13px; font-weight: 700; color: #000000;">${decision}</div>
+          <div style="font-size: 13px; font-weight: 700; color: ${autoSolved ? "#059669" : "#000000"};">${autoSolved ? "PASS (Auto-Solved)" : decision}</div>
         </td>
         <td style="padding: 14px 18px; border-right: 1px solid #e5e5e5; width: 33.33%;">
-          <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #737373; margin-bottom: 4px;">Actionable Items</div>
+          <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #737373; margin-bottom: 4px;">Resolved Items</div>
           <div style="font-size: 13px; font-weight: 700; color: #000000;">${findings.length} defect${findings.length === 1 ? "" : "s"}</div>
         </td>
         <td style="padding: 14px 18px; width: 33.33%;">
           <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #737373; margin-bottom: 4px;">Target Ref</div>
           <div style="font-size: 13px; font-weight: 600; font-family: ui-monospace, monospace; color: #000000;">
             <a href="${prOrCommitUrl}" style="color: #000000; text-decoration: underline;" target="_blank">
-              ${pullNumber ? `PR #${pullNumber}` : shortSha}
+              ${autoSolvedCommitSha ? autoSolvedCommitSha.slice(0, 7) : pullNumber ? `PR #${pullNumber}` : shortSha}
             </a>
           </div>
         </td>
-      </tr>
     </table>
 
     <!-- Findings Section -->

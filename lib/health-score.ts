@@ -36,6 +36,7 @@ export interface RepoRunRecord {
   dialogueTriggered?: boolean;
   autoSolved?: boolean;
   autoSolvedAt?: number;
+  autoSolvedCommitSha?: string;
   createdAt: number; // Unix timestamp ms
   // SEO & Web Vitals
   seoScore?: number; // 0 - 100

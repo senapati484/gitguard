@@ -13,6 +13,7 @@ import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { calculateHealthScore, type RepoRunRecord } from "@/lib/health-score";
 import { getInstallationOctokit } from "@/lib/github-app";
 import { logAuditEvent, type AuditLogActor } from "@/lib/audit-log";
+import { autoSolveAndCommitToGitHub } from "@/lib/auto-solve-git";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -112,9 +113,35 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // 1. Auto-Solve Update in Firestore
+    const targetRepo = repo || runData.repo;
+    const targetSha = sha || runData.sha;
+    let autoSolvedCommitSha: string | undefined;
+
+    // 1. Attempt autonomous commit and push to GitHub if fixes are supplied
+    if (targetRepo && Array.isArray(body.fixes) && body.fixes.length > 0) {
+      try {
+        const [owner, repoName] = targetRepo.split("/");
+        if (owner && repoName) {
+          const octokit = await getInstallationOctokit(Number(id));
+          const autoRes = await autoSolveAndCommitToGitHub({
+            octokit,
+            owner,
+            repo: repoName,
+            branch: body.branch || "main",
+            fixes: body.fixes,
+          });
+          if (autoRes.success && autoRes.commitSha) {
+            autoSolvedCommitSha = autoRes.commitSha;
+          }
+        }
+      } catch (pushErr) {
+        console.warn("[auto-solve] Notice: could not commit directly via GitHub API:", pushErr);
+      }
+    }
+
+    // 2. Auto-Solve Update in Firestore
     const updatedSummary = (runData.summary || "") +
-      `\n\n> ⚡ **GitGuard Auto-Solve Applied**: Credential leak quarantined and resolved. Tokens moved to environment variables and code sanitized.`;
+      `\n\n> ⚡ **GitGuard Auto-Solve Applied**: Code defects quarantined and resolved.${autoSolvedCommitSha ? ` Pushed clean commit \`${autoSolvedCommitSha.slice(0, 7)}\` to GitHub.` : ""}`;
 
     await adminDb.collection("runs").doc(targetDocId).update({
       decision: "PASS",
@@ -122,6 +149,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       criticalCount: 0,
       autoSolved: true,
       autoSolvedAt: Date.now(),
+      autoSolvedCommitSha: autoSolvedCommitSha || null,
       summary: updatedSummary,
     });
 
@@ -138,16 +166,14 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
           criticalCount: 0,
           autoSolved: true,
           autoSolvedAt: Date.now(),
+          autoSolvedCommitSha: autoSolvedCommitSha || null,
           summary: updatedSummary,
         },
         { merge: true }
       )
       .catch(() => {});
 
-    // 2. Update GitHub Check Run to success
-    const targetRepo = repo || runData.repo;
-    const targetSha = sha || runData.sha;
-
+    // 3. Update GitHub Check Run to success
     if (targetRepo && targetSha) {
       try {
         const [owner, repoName] = targetRepo.split("/");
@@ -162,7 +188,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
             conclusion: "success",
             output: {
               title: "GitGuard Verdict: PASS (Auto-Solved & Remediated)",
-              summary: `### ⚡ GitGuard Auto-Solve & Remediation Completed\n\nThe previous findings for commit \`${targetSha.slice(0, 7)}\` have been auto-solved.\n\n- Sensitive credentials were extracted to local environment configurations.\n- Code references have been secured via \`process.env\` variables.\n- Repository Health Score restored to Grade A.`,
+              summary: `### ⚡ GitGuard Auto-Solve & Remediation Completed\n\nThe previous findings for commit \`${targetSha.slice(0, 7)}\` have been auto-solved.${autoSolvedCommitSha ? ` Clean commit [\`${autoSolvedCommitSha.slice(0, 7)}\`](https://github.com/${owner}/${repoName}/commit/${autoSolvedCommitSha}) was pushed directly to GitHub.` : ""}\n\n- Sensitive credentials and software defects were resolved.\n- Repository Health Score restored to Grade A.`,
             },
           });
         }

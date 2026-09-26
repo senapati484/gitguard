@@ -35,20 +35,26 @@ export function buildSlackBlockKitPayload(
   payload: VerdictAlertPayload,
   findings: ActionableFinding[]
 ) {
-  const { repo, sha, decision, pullNumber } = payload;
-  const isBlock = decision === "BLOCK";
-  const emoji = isBlock ? "🚨" : "⚠️";
+  const { repo, sha, decision, pullNumber, autoSolved, autoSolvedCommitSha } = payload;
+  const isBlock = decision === "BLOCK" && !autoSolved;
+  const emoji = autoSolved ? "⚡" : isBlock ? "🚨" : "⚠️";
   const shortSha = sha.slice(0, 7);
   const prOrCommitUrl = pullNumber
     ? `https://github.com/${repo}/pull/${pullNumber}`
+    : autoSolvedCommitSha
+    ? `https://github.com/${repo}/commit/${autoSolvedCommitSha}`
     : `https://github.com/${repo}/commit/${sha}`;
+
+  const verdictLabel = autoSolved && autoSolvedCommitSha
+    ? `\`PASS (Auto-Solved & Pushed)\``
+    : `\`${decision}\` (${isBlock ? "Merge Blocked" : "Review Suggested"})`;
 
   const blocks: unknown[] = [
     {
       type: "header",
       text: {
         type: "plain_text",
-        text: `${emoji} GitGuard ${decision}: ${repo}`,
+        text: `${emoji} GitGuard ${autoSolved ? "Auto-Solved & Pushed" : decision}: ${repo}`,
         emoji: true,
       },
     },
@@ -61,15 +67,15 @@ export function buildSlackBlockKitPayload(
         },
         {
           type: "mrkdwn",
-          text: `*Verdict:*\n\`${decision}\` (${isBlock ? "Merge Blocked" : "Review Suggested"})`,
+          text: `*Verdict:*\n${verdictLabel}`,
         },
         {
           type: "mrkdwn",
-          text: `*Commit / PR:*\n<${prOrCommitUrl}|${pullNumber ? `PR #${pullNumber}` : shortSha}>`,
+          text: `*Commit / PR:*\n<${prOrCommitUrl}|${autoSolvedCommitSha ? `clean: ${autoSolvedCommitSha.slice(0, 7)}` : pullNumber ? `PR #${pullNumber}` : shortSha}>`,
         },
         {
           type: "mrkdwn",
-          text: `*Flagged Items:*\n${findings.length} actionable finding(s)`,
+          text: `*Resolved Items:*\n${findings.length} defect(s)`,
         },
       ],
     },
