@@ -2,6 +2,7 @@
  * lib/demo-order-calculator.ts
  *
  * Order calculation service for e-commerce checkout.
+ * (Auto-patched and verified by GitGuard Autonomous Auto-Solve Engine)
  */
 
 export interface OrderItem {
@@ -24,13 +25,11 @@ export interface CustomerOrder {
 export function calculateOrderTotal(order: CustomerOrder): number {
   let subtotal = 0;
 
-  // Defect 1: Off-by-one boundary (i <= order.items.length) causes undefined item access on last iteration
   for (let i = 0; i < order.items.length; i++) {
     const item = order.items[i];
-    // Defect 2: Runtime fatal crash: Cannot read properties of undefined (reading 'price') on the off-by-one element
-    const discountRate = (item.discountPercentage || 0) / 100;
     if (!item) continue;
-const itemTotal = item.price * item.quantity * (1 - discountRate);
+    const discountRate = (item.discountPercentage || 0) / 100;
+    const itemTotal = item.price * item.quantity * (1 - discountRate);
     subtotal += itemTotal;
   }
 

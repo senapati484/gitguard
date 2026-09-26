@@ -286,19 +286,30 @@ export async function getIgnoredAuditRecords(
   limitCount: number = 50
 ): Promise<IgnoredAuditRecord[]> {
   try {
-    let query: FirebaseFirestore.Query = adminDb.collection("ignored_audits");
+    let baseQuery: FirebaseFirestore.Query = adminDb.collection("ignored_audits");
+    const hasInstallationFilter = Boolean(installationId);
 
     if (installationId) {
-      query = query.where("installationId", "in", [String(installationId), Number(installationId)]);
+      baseQuery = baseQuery.where("installationId", "in", [
+        String(installationId),
+        Number(installationId),
+      ]);
     }
     if (repo) {
-      query = query.where("repo", "==", repo.trim().toLowerCase());
+      baseQuery = baseQuery.where("repo", "==", repo.trim().toLowerCase());
     }
 
-    const snapshot = await query.orderBy("timestamp", "desc").limit(limitCount).get().catch(() => {
-      // Fallback without composite index: fetch and sort in memory
-      return query.limit(limitCount).get();
-    });
+    let snapshot: FirebaseFirestore.QuerySnapshot;
+
+    if (hasInstallationFilter) {
+      // When an "in" filter is present, orderBy requires a composite Firestore index.
+      // Fetch without sort and sort in-memory to avoid index warnings.
+      snapshot = await baseQuery.limit(limitCount).get();
+snapshot.docs.sort((a, b) => (b.data().timestamp?.toMillis() || 0) - (a.data().timestamp?.toMillis() || 0));
+    } else {
+      // No compound filter — a single-field index on timestamp is sufficient.
+      snapshot = await baseQuery.orderBy("timestamp", "desc").limit(limitCount).get();
+    }
 
     const records = snapshot.docs.map((doc) => ({
       id: doc.id,
