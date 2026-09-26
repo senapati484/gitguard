@@ -78,7 +78,7 @@ export async function getInstallationPolicy(
     setTimeout(() => resolve(DEFAULT_ORG_POLICY), 2500)
   );
 
-  return Promise.race([fetchPolicy(), timeoutPromise]);
+  return Promise.race([fetchPolicy().catch(() => DEFAULT_ORG_POLICY), timeoutPromise]);
 }
 
 /**

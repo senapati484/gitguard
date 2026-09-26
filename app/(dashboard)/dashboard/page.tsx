@@ -71,11 +71,23 @@ export default async function DashboardPage() {
       // Query runs from top-level runs collection
       let runs: RepoRunRecord[] = [];
       try {
-        const runsSnap = await adminDb
-          .collection("runs")
-          .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-          .limit(20)
-          .get();
+        const fetchRuns = async () => {
+          return adminDb
+            .collection("runs")
+            .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
+            .limit(20)
+            .get();
+        };
+
+        let runsSnap: FirebaseFirestore.QuerySnapshot | null = null;
+        try {
+          runsSnap = await Promise.race([
+            fetchRuns().catch(() => null),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+          ]);
+        } catch {
+          runsSnap = null;
+        }
 
         if (runsSnap && !runsSnap.empty) {
           runs = runsSnap.docs.map((d) => ({
@@ -96,12 +108,23 @@ export default async function DashboardPage() {
       // Query whitelisted audit count
       let whitelistedCount = 0;
       try {
-        const auditSnap = await adminDb
-          .collection("ignored_audits")
-          .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-          .limit(20)
-          .get()
-          .catch(() => null);
+        const fetchAudit = async () => {
+          return adminDb
+            .collection("ignored_audits")
+            .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
+            .limit(20)
+            .get();
+        };
+
+        let auditSnap: FirebaseFirestore.QuerySnapshot | null = null;
+        try {
+          auditSnap = await Promise.race([
+            fetchAudit().catch(() => null),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+          ]);
+        } catch {
+          auditSnap = null;
+        }
 
         whitelistedCount = auditSnap ? auditSnap.size : 0;
       } catch {

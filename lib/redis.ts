@@ -104,7 +104,8 @@ if (typeof process !== "undefined" && !globalState.__gitguard_redis_error_hooked
       errno === -54 ||
       errno === -60 ||
       msg.includes("ETIMEDOUT") ||
-      msg.includes("ECONNRESET")
+      msg.includes("ECONNRESET") ||
+      msg.includes("Stream isn't writeable")
     ) {
       return; // Ignore idle socket termination from serverless Redis
     }

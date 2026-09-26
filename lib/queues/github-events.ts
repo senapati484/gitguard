@@ -83,8 +83,32 @@ export async function enqueueGitHubEvent(data: GitHubEventJobData): Promise<void
       ? `push-${safeRepo}-${data.sha}`
       : `pr-${safeRepo}-${data.pullNumber}-${data.sha}`;
 
-  await queue.add(data.event, data, { jobId });
-  console.log(
-    `[queue] Enqueued ${data.event} event for ${data.repo} (sha=${data.sha.slice(0, 7)}, installation=${data.installationId})`
-  );
+  let attempts = 0;
+  const maxAttempts = 3;
+  while (attempts < maxAttempts) {
+    try {
+      await queue.add(data.event, data, { jobId });
+      console.log(
+        `[queue] Enqueued ${data.event} event for ${data.repo} (sha=${data.sha.slice(0, 7)}, installation=${data.installationId})`
+      );
+      return;
+    } catch (err) {
+      attempts++;
+      const msg = (err as Error)?.message || String(err);
+      if (
+        attempts < maxAttempts &&
+        (msg.includes("Stream isn't writeable") ||
+          msg.includes("ECONNRESET") ||
+          msg.includes("ETIMEDOUT") ||
+          msg.includes("closed"))
+      ) {
+        console.warn(
+          `[queue] Redis temporarily unavailable, retrying enqueue in 250ms (attempt ${attempts}/${maxAttempts})...`
+        );
+        await new Promise((res) => setTimeout(res, 250));
+        continue;
+      }
+      throw err;
+    }
+  }
 }

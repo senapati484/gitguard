@@ -53,50 +53,65 @@ export default async function RepoDetailPage({ params }: RepoPageProps) {
   const installIdStr = String(id);
   const installIdNum = Number(id);
 
-  // 1. Fetch installation document
+  // 1. Fetch installation document with timeout
   let installationData: InstallationRecord | null = null;
+  try {
+    const fetchInstall = async (): Promise<InstallationRecord | null> => {
+      const docRef = await adminDb.collection("installations").doc(installIdStr).get();
+      if (docRef.exists) {
+        return docRef.data() as unknown as InstallationRecord;
+      }
+      const querySnap = await adminDb
+        .collection("installations")
+        .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
+        .limit(1)
+        .get();
 
-  // Try direct doc lookup first
-  const docRef = await adminDb.collection("installations").doc(installIdStr).get();
-  if (docRef.exists) {
-    installationData = docRef.data() as unknown as InstallationRecord;
-  } else {
-    // Try query by installationId field
-    const querySnap = await adminDb
-      .collection("installations")
-      .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-      .limit(1)
-      .get();
+      if (!querySnap.empty) {
+        return querySnap.docs[0].data() as unknown as InstallationRecord;
+      }
+      return null;
+    };
 
-    if (!querySnap.empty) {
-      installationData = querySnap.docs[0].data() as unknown as InstallationRecord;
-    }
+    installationData = await Promise.race([
+      fetchInstall().catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+  } catch (err) {
+    console.warn(`[repo-page] Notice: Could not fetch installation ${id}:`, (err as Error)?.message || err);
   }
 
-  // Authorize user
-  if (installationData?.adminUids && !installationData.adminUids.includes(uid)) {
+  // Authorize user (only if installation explicitly restricts admins)
+  if (installationData?.adminUids && installationData.adminUids.length > 0 && !installationData.adminUids.includes(uid)) {
     redirect("/dashboard");
   }
 
-  // 2. Fetch runs for this installation
+  // 2. Fetch runs for this installation with timeout
   let runs: RepoRunRecord[] = [];
-
   try {
-    const runsSnap = await adminDb
-      .collection("runs")
-      .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
-      .limit(50)
-      .get();
+    const fetchRuns = async (): Promise<RepoRunRecord[]> => {
+      const runsSnap = await adminDb
+        .collection("runs")
+        .where("installationId", "in", [installIdStr, !isNaN(installIdNum) ? installIdNum : installIdStr])
+        .limit(50)
+        .get();
 
-    if (runsSnap && !runsSnap.empty) {
-      runs = runsSnap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as RepoRunRecord),
-        createdAt: typeof d.data().createdAt === "number" ? d.data().createdAt : Date.now(),
-      }));
-    }
+      if (runsSnap && !runsSnap.empty) {
+        return runsSnap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as RepoRunRecord),
+          createdAt: typeof d.data().createdAt === "number" ? d.data().createdAt : Date.now(),
+        }));
+      }
+      return [];
+    };
+
+    runs = await Promise.race([
+      fetchRuns().catch(() => []),
+      new Promise<RepoRunRecord[]>((resolve) => setTimeout(() => resolve([]), 3500)),
+    ]);
   } catch (err) {
-    console.warn(`[repo-page] Error querying runs for repo ${id}:`, err);
+    console.warn(`[repo-page] Error querying runs for repo ${id}:`, (err as Error)?.message || err);
   }
 
   const primaryRepo =

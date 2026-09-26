@@ -277,9 +277,16 @@ export async function logIgnoredFindingToFirestore(
   }
 }
 
-/**
- * Retrieves historical ignored / whitelisted findings from Firestore.
- */
+const toMs = (val: unknown): number => {
+  if (!val) return 0;
+  if (typeof (val as { toMillis?: () => number }).toMillis === "function") {
+    return (val as { toMillis: () => number }).toMillis();
+  }
+  if (typeof val === "number") return val;
+  const parsed = new Date(val as string | number).getTime();
+  return isNaN(parsed) ? 0 : parsed;
+};
+
 export async function getIgnoredAuditRecords(
   installationId?: string | number,
   repo?: string,
@@ -299,17 +306,20 @@ export async function getIgnoredAuditRecords(
       baseQuery = baseQuery.where("repo", "==", repo.trim().toLowerCase());
     }
 
-    let snapshot: FirebaseFirestore.QuerySnapshot;
+    const fetchSnap = async () => {
+      if (hasInstallationFilter) {
+        return baseQuery.limit(limitCount).get();
+      } else {
+        return baseQuery.orderBy("timestamp", "desc").limit(limitCount).get();
+      }
+    };
 
-    if (hasInstallationFilter) {
-      // When an "in" filter is present, orderBy requires a composite Firestore index.
-      // Fetch without sort and sort in-memory to avoid index warnings.
-      snapshot = await baseQuery.limit(limitCount).get();
-snapshot.docs.sort((a, b) => (b.data().timestamp?.toMillis() || 0) - (a.data().timestamp?.toMillis() || 0));
-    } else {
-      // No compound filter — a single-field index on timestamp is sufficient.
-      snapshot = await baseQuery.orderBy("timestamp", "desc").limit(limitCount).get();
-    }
+    const snapshot = await Promise.race([
+      fetchSnap().catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+
+    if (!snapshot) return [];
 
     const records = snapshot.docs.map((doc) => ({
       id: doc.id,
@@ -317,7 +327,7 @@ snapshot.docs.sort((a, b) => (b.data().timestamp?.toMillis() || 0) - (a.data().t
     }));
 
     return records.sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      (a, b) => toMs(b.timestamp) - toMs(a.timestamp)
     );
   } catch (err) {
     console.warn(`[gitguard-ignore] Failed to fetch ignored audit records:`, err);
