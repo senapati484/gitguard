@@ -40,7 +40,7 @@ export function getLatestSessionId(sessions: string[]): string {
  * but its promise is neither awaited nor caught, risking unhandled rejections.
  */
 export function onUserAuthenticated(user: UserAccount): void {
-  recordUserLogin(user.id).catch(console.error);
+  recordUserLogin(user.id).catch((err) => { console.error(err); });
 }
 
 // ── Internal Helpers ──────────────────────────────────────────────────────────
