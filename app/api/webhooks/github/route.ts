@@ -189,6 +189,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           repoName: p.repository.name,
           pullNumber: p.number,
           action: p.action,
+          ref: p.pull_request.head.ref,
         };
 
         await enqueueGitHubEvent(jobData);

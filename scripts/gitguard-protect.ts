@@ -571,8 +571,9 @@ async function main() {
 
         // Execute sanitized push using the remote name parsed from hook args
         try {
-          execSync(`git push ${remoteName} HEAD --no-verify`, { stdio: "inherit" });
-          console.log("\n🎉 Clean push to GitHub complete! All defects auto-solved. Zero bugs on GitHub.");
+          const currentBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
+          execSync(`git push ${remoteName} HEAD:refs/heads/${currentBranch} --no-verify`, { stdio: "inherit" });
+          console.log(`\n🎉 Clean push to GitHub complete on branch '${currentBranch}'! All defects auto-solved. Zero bugs on GitHub.`);
         } catch {
           console.log("\n💡 Note: Please re-run 'git push' to transmit your resolved commit.");
         }

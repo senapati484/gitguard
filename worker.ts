@@ -107,6 +107,7 @@ async function processGitHubEvent(
     repoName,
     before,
     pullNumber,
+    ref,
   } = job.data;
 
   console.log(
@@ -462,7 +463,11 @@ async function processGitHubEvent(
 
   let autoSolvedCommitSha: string | undefined;
   let autoSolvedFiles: string[] = [];
-  let targetBranch = "main";
+  // Resolve the exact target branch for autonomous auto-solve
+  let targetBranch = (ref || job.data.ref || "").replace(/^refs\/heads\//, "");
+  if (!targetBranch) {
+    targetBranch = "main";
+  }
 
   if (event === "pull_request" && pullNumber) {
     try {
@@ -471,12 +476,12 @@ async function processGitHubEvent(
         repo: repoShortName,
         pull_number: pullNumber,
       });
-      targetBranch = prResp.data.head?.ref || "main";
-    } catch {
-      targetBranch = "main";
+      if (prResp.data.head?.ref) {
+        targetBranch = prResp.data.head.ref;
+      }
+    } catch (prErr) {
+      console.warn(`[worker] Notice: Could not fetch PR #${pullNumber} head ref, keeping fallback branch '${targetBranch}':`, prErr);
     }
-  } else if (job.data.ref) {
-    targetBranch = job.data.ref.replace(/^refs\/heads\//, "");
   }
 
   const shouldAutoSolve =

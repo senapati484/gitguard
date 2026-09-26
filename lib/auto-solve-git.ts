@@ -225,36 +225,43 @@ export async function autoSolveAndCommitToGitHub(options: {
 
       let committedSha: string | undefined;
 
-      // Strategy A: Try GitHub App Octokit PUT /contents
-      if (fileSha) {
-        try {
-          const putRes = await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
-            owner,
-            repo,
-            path: filePath,
-            branch: cleanBranch,
-            message: commitMessage,
-            content: Buffer.from(patchedContent, "utf-8").toString("base64"),
-            sha: fileSha,
-            committer: {
-              name: "GitGuard [bot]",
-              email: "bot@gitguard.dev",
-            },
-            author: {
-              name: "GitGuard [bot]",
-              email: "bot@gitguard.dev",
-            },
-          });
+      // Strategy A: Try GitHub App Octokit PUT /contents directly on target branch
+      try {
+        const putParams: Record<string, unknown> = {
+          owner,
+          repo,
+          path: filePath,
+          branch: cleanBranch,
+          message: commitMessage,
+          content: Buffer.from(patchedContent, "utf-8").toString("base64"),
+          committer: {
+            name: "GitGuard [bot]",
+            email: "bot@gitguard.dev",
+          },
+          author: {
+            name: "GitGuard [bot]",
+            email: "bot@gitguard.dev",
+          },
+        };
+        if (fileSha) {
+          putParams.sha = fileSha;
+        }
 
-          const putData = putRes.data as { commit?: { sha?: string } };
-          committedSha = putData.commit?.sha;
-        } catch (octoErr: unknown) {
-          const isForbidden =
-            (octoErr as { status?: number })?.status === 403 ||
-            String(octoErr).includes("Resource not accessible");
-          if (!isForbidden) {
-            console.warn(`[auto-solve-git] Octokit PUT failed with unexpected error:`, octoErr);
-          }
+        const putRes = await octokit.request(
+          "PUT /repos/{owner}/{repo}/contents/{path}",
+          putParams as Parameters<Octokit["request"]>[1]
+        );
+        const putData = putRes.data as { commit?: { sha?: string } };
+        committedSha = putData.commit?.sha;
+      } catch (octoErr: unknown) {
+        const isForbidden =
+          (octoErr as { status?: number })?.status === 403 ||
+          String(octoErr).includes("Resource not accessible");
+        if (!isForbidden) {
+          console.warn(
+            `[auto-solve-git] Octokit PUT failed on branch '${cleanBranch}':`,
+            octoErr
+          );
         }
       }
 
@@ -262,16 +269,36 @@ export async function autoSolveAndCommitToGitHub(options: {
       if (!committedSha) {
         const localPath = path.resolve(process.cwd(), filePath);
         if (fs.existsSync(localPath)) {
-          console.log(`[auto-solve-git] Applying verified patch locally & executing Git CLI push as GitGuard [bot]...`);
-          fs.writeFileSync(localPath, patchedContent, "utf-8");
-          const { execSync } = await import("child_process");
-          execSync(`git add "${filePath}"`, { stdio: "ignore" });
-          execSync(
-            `git -c user.name="GitGuard [bot]" -c user.email="bot@gitguard.dev" commit -m "${commitMessage.replace(/"/g, '\\"')}"`,
-            { stdio: "ignore" }
+          console.log(
+            `[auto-solve-git] Applying verified patch locally & executing Git CLI push to '${cleanBranch}' as GitGuard [bot]...`
           );
-          execSync(`git push origin ${cleanBranch} --no-verify`, { stdio: "ignore" });
-          committedSha = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+          const { execSync } = await import("child_process");
+
+          let origBranch = "";
+          let switched = false;
+          try {
+            origBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
+            if (origBranch !== cleanBranch) {
+              // Ensure we are working on the clean target branch, not accidentally on main
+              execSync(`git checkout -B "${cleanBranch}"`, { stdio: "ignore" });
+              switched = true;
+            }
+
+            fs.writeFileSync(localPath, patchedContent, "utf-8");
+            execSync(`git add "${filePath}"`, { stdio: "ignore" });
+            execSync(
+              `git -c user.name="GitGuard [bot]" -c user.email="bot@gitguard.dev" commit -m "${commitMessage.replace(/"/g, '\\"')}"`,
+              { stdio: "ignore" }
+            );
+            execSync(`git push origin "${cleanBranch}" --no-verify`, { stdio: "ignore" });
+            committedSha = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+          } finally {
+            if (switched && origBranch) {
+              try {
+                execSync(`git checkout "${origBranch}"`, { stdio: "ignore" });
+              } catch {}
+            }
+          }
         }
       }
 
