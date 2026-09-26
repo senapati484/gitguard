@@ -534,7 +534,10 @@ const worker = new Worker<GitHubEventJobData>(
   processGitHubEvent,
   {
     connection: redis,
-    concurrency: 5,
+    concurrency: 1,
+    lockDuration: 120_000, // 2 minutes lock duration (prevents premature lock expiration)
+    stalledInterval: 60_000,
+    maxStalledCount: 2,
   }
 );
 

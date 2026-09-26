@@ -94,13 +94,14 @@ export async function generateConventionalCommit(
   const firstSecretWithFix = confirmedSecrets.find((s) => s.suggestedChange);
 
   const hunks = extractCompressedHunks(diff);
+  const maxHunks = (confirmedSecrets?.length > 0 || bugFindings?.length > 0) ? 8 : 4;
   const diffContext =
     hunks.length > 0
       ? hunks
-          .slice(0, 10)
-          .map((h) => `File: ${h.file}\n\`\`\`diff\n${h.diffText.slice(0, 1200)}\n\`\`\``)
+          .slice(0, maxHunks)
+          .map((h) => `File: ${h.file}\n\`\`\`diff\n${h.diffText.slice(0, 500)}\n\`\`\``)
           .join("\n\n")
-      : diff.slice(0, 4000);
+      : diff.slice(0, 2000);
 
   const userPrompt = `Git Changes Summary:
 ${diffContext}

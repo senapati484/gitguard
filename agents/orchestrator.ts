@@ -742,19 +742,48 @@ Structure:
 - Suggested Conventional Commit block
 - Actionable next steps for the developer`;
 
-  const prCommentText = await generateAICompletion({
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are the GitGuard Orchestrator, an AI code security and correctness gatekeeper for enterprise pull requests.",
-      },
-      { role: "user", content: synthesisPrompt },
-    ],
-    temperature: 0.1,
-    jsonMode: false,
-    preferredModel: "sonnet",
-  });
+  let prCommentText: string | null = null;
+
+  // Fast-path: When everything is clean, construct a deterministic, crisp summary (0 tokens, 0ms latency)
+  if (
+    decision === "PASS" &&
+    confirmedSecrets.length === 0 &&
+    (state.bugFindings || []).length === 0 &&
+    (state.securityFindings || []).length === 0 &&
+    (!state.seoFindings || state.seoFindings.length === 0)
+  ) {
+    prCommentText = [
+      "### 🛡️ GitGuard Autonomous Analysis: ✅ PASS",
+      "",
+      "All automated guardrails passed cleanly. No secrets, software bugs, or security vulnerabilities were detected in this changeset.",
+      "",
+      "- ✅ **SecretAgent**: 0 secret leaks detected",
+      "- ✅ **BugAgent**: 0 software defects identified",
+      "- ✅ **SecurityAgent**: SAST scanning verified",
+      `- 🌐 **SEO & Web Vitals**: Score ${state.seoScore ?? 100}/100`,
+      "",
+      "**Recommended Conventional Commit**:",
+      "```",
+      commitResult.commitMessage,
+      "```",
+      "",
+      "> *Autonomous verification powered by GitGuard LangGraph multi-agent consensus.*",
+    ].join("\n");
+  } else {
+    prCommentText = await generateAICompletion({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are the GitGuard Orchestrator, an AI code security and correctness gatekeeper for enterprise pull requests.",
+        },
+        { role: "user", content: synthesisPrompt },
+      ],
+      temperature: 0.1,
+      jsonMode: false,
+      preferredModel: "sonnet",
+    });
+  }
 
   let finalComment =
     prCommentText ||

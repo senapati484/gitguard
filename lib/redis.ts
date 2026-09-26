@@ -36,8 +36,6 @@ function buildConnection(): IORedis {
     maxRetriesPerRequest: null,
     // Don't queue commands when Redis is down; surface errors immediately
     enableOfflineQueue: false,
-    // Batch commands automatically to reduce RTT on Upstash
-    enableAutoPipelining: true,
     // TCP keep-alive prevents Upstash serverless from dropping idle connections
     keepAlive: 10_000,
     connectTimeout: 10_000,
