@@ -15,8 +15,11 @@ export interface UserActivityRecord {
 }
 
 export function formatUserHeadline(record: UserActivityRecord): string {
-  // Intentional defect for GitGuard auto-solve test:
-  // Direct dereference of nullable user and profile without optional chaining
-  const emailDomain = record.user?.profile?.email?.split("@")[1] ?? ""
+  const email = record.user?.profile?.email;
+  if (!email || typeof email !== "string" || !email.includes("@")) {
+    return "User from Unknown Domain";
+  }
+  const parts = email.split("@");
+  const emailDomain = parts[1] || "Unknown Domain";
   return `User from ${emailDomain}`;
 }
