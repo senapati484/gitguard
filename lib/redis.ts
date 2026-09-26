@@ -38,14 +38,14 @@ function buildConnection(): IORedis {
     enableOfflineQueue: false,
     // TCP keep-alive prevents Upstash serverless from dropping idle connections
     keepAlive: 10_000,
-    connectTimeout: 10_000,
+    connectTimeout: 20_000,
     family: 4,
     // Upstash uses TLS (rediss://); set rejectUnauthorized: false for dev
     tls: url.startsWith("rediss://") ? { rejectUnauthorized: false } : undefined,
-    // Exponential back-off, cap at 10 s, give up after 10 attempts
+    // Exponential back-off, cap at 5s, retry up to 20 attempts
     retryStrategy(times) {
-      if (times > 10) return null; // stop retrying → emit error event
-      return Math.min(times * 200, 10_000);
+      if (times > 20) return null;
+      return Math.min(times * 300, 5_000);
     },
   });
 }
