@@ -172,8 +172,34 @@ export async function generateAICompletion(
       } else {
         const errorText = await res.text();
         console.warn(
-          `[ai-client] Groq API returned status ${res.status}: ${errorText}. Attempting fallback...`
+          `[ai-client] Groq API returned status ${res.status}: ${errorText}.`
         );
+
+        // Instant Groq model fallback on 429 rate limit
+        if (res.status === 429 && groqModel !== "openai/gpt-oss-20b") {
+          console.log(`[ai-client] ⚡ Groq 429 hit on ${groqModel} — immediately falling back to high-capacity openai/gpt-oss-20b...`);
+          const fallbackRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${groqApiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "openai/gpt-oss-20b",
+              messages,
+              temperature,
+              ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+            }),
+          });
+          if (fallbackRes.ok) {
+            const fallbackData = await fallbackRes.json();
+            const content = fallbackData.choices?.[0]?.message?.content;
+            if (content) {
+              console.log(`[ai-client] Groq openai/gpt-oss-20b response received successfully`);
+              return content;
+            }
+          }
+        }
       }
     } catch (err) {
       console.warn(`[ai-client] Groq API request failed:`, err);
