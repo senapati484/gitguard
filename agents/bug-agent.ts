@@ -208,8 +208,8 @@ export async function detectBugsInHunks(
 ): Promise<BugFinding[]> {
   if (hunks.length === 0) return [];
 
-  // Partition hunks into batches sized appropriately for model inference (capped at 6,000 chars)
-  const batches = batchHunksForInference(hunks as CompressedHunk[], 6_000).slice(0, 4);
+  // Partition hunks into batches sized appropriately for model inference (capped at 14,000 chars)
+  const batches = batchHunksForInference(hunks as CompressedHunk[], 14_000).slice(0, 3);
   console.log(
     `[bug-agent] Compressed and batched into ${batches.length} slice(s) for AI bug analysis (${hunks.length} hunk(s)).`
   );
@@ -231,9 +231,9 @@ export async function detectBugsInHunks(
       batchResults.push(parseBugFindings(rawCompletion));
     }
 
-    // Gentle pacing between batches if multiple batches exist
+    // Pacing between batches to respect Groq token bucket replenishment
     if (batches.length > 1 && batch.batchIndex < batch.totalBatches) {
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 1200));
     }
   }
 

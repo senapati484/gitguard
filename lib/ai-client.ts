@@ -28,9 +28,33 @@ export interface CompletionOptions {
   preferredProvider?: "groq" | "gemini" | "auto";
 }
 
+
+// In-memory circuit breaker for Google Gemini free tier daily quota (20 requests/day limit)
+let geminiExhaustedUntil = 0;
+
+export function isGeminiAvailable(): boolean {
+  if (!process.env.GEMINI_API_KEY) return false;
+  return Date.now() > geminiExhaustedUntil;
+}
+
+export function parseRetryDelayMs(errorText: string, retryAfterHeader: string | null): number {
+  if (retryAfterHeader) {
+    const sec = parseFloat(retryAfterHeader);
+    if (!isNaN(sec) && sec > 0) return Math.min(Math.ceil(sec * 1000) + 200, 8000);
+  }
+  const match = errorText.match(/Please try again in ([0-9.]+)(s|ms)/i);
+  if (match) {
+    const num = parseFloat(match[1]);
+    const unit = match[2].toLowerCase();
+    const ms = unit === "ms" ? Math.ceil(num) + 150 : Math.ceil(num * 1000) + 300;
+    return Math.min(Math.max(ms, 600), 8000);
+  }
+  return 2500;
+}
+
 /**
  * Generate a chat completion using Sonnet (if specified & key present), Groq (primary for fast diffs),
- * or Gemini (for large contexts >24KB or fallback).
+ * or Gemini (for large contexts >50KB or fallback).
  */
 export async function generateAICompletion(
   options: CompletionOptions
@@ -86,14 +110,14 @@ export async function generateAICompletion(
 
   // Calculate total prompt characters to guide routing
   const totalPromptChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
-  const isLargeContext = totalPromptChars > 10_000;
+  const isLargeContext = totalPromptChars > 50_000 && isGeminiAvailable();
 
   const groqApiKey = process.env.GROQ_API_KEY;
   const geminiApiKey = process.env.GEMINI_API_KEY;
 
   // Function to call Gemini
   async function callGemini(): Promise<string | null> {
-    if (!geminiApiKey) return null;
+    if (!isGeminiAvailable() || !geminiApiKey) return null;
     const geminiModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
     try {
       console.log(`[ai-client] Calling Google Gemini API (model: ${geminiModel}, promptChars: ${totalPromptChars})...`);
@@ -134,7 +158,13 @@ export async function generateAICompletion(
         }
       } else {
         const errorText = await res.text();
-        console.warn(`[ai-client] Gemini API returned status ${res.status}: ${errorText}`);
+        console.warn(`[ai-client] Gemini API returned status ${res.status}: ${errorText.slice(0, 180)}...`);
+
+        // Check if daily free tier quota was hit (20 reqs/day)
+        if (res.status === 429 && (errorText.includes("RESOURCE_EXHAUSTED") || errorText.includes("Quota exceeded"))) {
+          geminiExhaustedUntil = Date.now() + 60 * 60 * 1000; // Trip breaker for 1 hour
+          console.warn(`[ai-client] 🛑 Google Gemini free tier daily quota exhausted. Tripping circuit breaker for 1 hour — all requests will route to Groq.`);
+        }
       }
     } catch (err) {
       console.warn(`[ai-client] Gemini API request failed:`, err);
@@ -142,91 +172,101 @@ export async function generateAICompletion(
     return null;
   }
 
-  // Function to call Groq
+  // Function to call Groq with retry-after backoff and multi-model fallback
   async function callGroq(): Promise<string | null> {
     if (!groqApiKey) return null;
-    const groqModel = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
-    try {
-      console.log(`[ai-client] Calling Groq API (model: ${groqModel}, promptChars: ${totalPromptChars})...`);
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${groqApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: groqModel,
-          messages,
-          temperature,
-          ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
-        }),
-      });
+    const primaryModel = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+    const candidateModels = Array.from(new Set([primaryModel, "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]));
 
-      if (res.ok) {
-        const data = await res.json();
-        const content = data.choices?.[0]?.message?.content;
-        if (content) {
-          console.log(`[ai-client] Groq response received successfully`);
-          return content;
-        }
-      } else {
-        const errorText = await res.text();
-        console.warn(
-          `[ai-client] Groq API returned status ${res.status}: ${errorText}.`
-        );
+    for (let modelIdx = 0; modelIdx < candidateModels.length; modelIdx++) {
+      const currentModel = candidateModels[modelIdx];
+      let retryCount = 0;
+      const maxRetries = 1;
 
-        // Instant Groq model fallback on 429 rate limit
-        if (res.status === 429 && groqModel !== "openai/gpt-oss-20b") {
-          console.log(`[ai-client] ⚡ Groq 429 hit on ${groqModel} — immediately falling back to high-capacity openai/gpt-oss-20b...`);
-          const fallbackRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      while (retryCount <= maxRetries) {
+        try {
+          console.log(
+            `[ai-client] Calling Groq API (model: ${currentModel}, promptChars: ${totalPromptChars}${retryCount > 0 ? `, retry ${retryCount}` : ""})...`
+          );
+          const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: {
               Authorization: `Bearer ${groqApiKey}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "openai/gpt-oss-20b",
+              model: currentModel,
               messages,
               temperature,
               ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
             }),
           });
-          if (fallbackRes.ok) {
-            const fallbackData = await fallbackRes.json();
-            const content = fallbackData.choices?.[0]?.message?.content;
+
+          if (res.ok) {
+            const data = await res.json();
+            const content = data.choices?.[0]?.message?.content;
             if (content) {
-              console.log(`[ai-client] Groq openai/gpt-oss-20b response received successfully`);
+              console.log(`[ai-client] Groq ${currentModel} response received successfully`);
               return content;
             }
+          } else {
+            const errorText = await res.text();
+            console.warn(
+              `[ai-client] Groq API returned status ${res.status} on ${currentModel}: ${errorText.slice(0, 180)}...`
+            );
+
+            // Handle 429 Token Bucket limits intelligently
+            if (res.status === 429) {
+              const retryAfterHeader = res.headers.get("retry-after");
+              const delayMs = parseRetryDelayMs(errorText, retryAfterHeader);
+
+              if (retryCount < maxRetries) {
+                console.log(
+                  `[ai-client] ⏳ Groq TPM limit hit on ${currentModel}. Waiting ${(delayMs / 1000).toFixed(1)}s for token replenishment...`
+                );
+                await new Promise((r) => setTimeout(r, delayMs));
+                retryCount++;
+                continue; // Retry with replenished tokens
+              } else {
+                console.log(
+                  `[ai-client] ⚡ Groq 429 persisted on ${currentModel} — falling back to next high-throughput model...`
+                );
+                break; // Break inner retry loop to try next candidate model
+              }
+            } else {
+              break;
+            }
           }
+        } catch (err) {
+          console.warn(`[ai-client] Groq API request failed on ${currentModel}:`, err);
+          break;
         }
       }
-    } catch (err) {
-      console.warn(`[ai-client] Groq API request failed:`, err);
     }
     return null;
   }
 
-  // Route 1: If large context or explicitly Gemini, try Gemini first
-  if (preferredProvider === "gemini" || (preferredProvider === "auto" && isLargeContext && geminiApiKey)) {
+  // Routing Strategy:
+  if (preferredProvider === "gemini" || (preferredProvider === "auto" && isLargeContext)) {
     if (isLargeContext) {
-      console.log(`[ai-client] Context size (${totalPromptChars} chars) exceeds 22KB — prioritizing Gemini 2.5 Flash (1M context) to prevent Groq TPM rate limits.`);
+      console.log(`[ai-client] Large context (${totalPromptChars} chars) — prioritizing Gemini.`);
     }
     const geminiRes = await callGemini();
     if (geminiRes) return geminiRes;
 
-    // Fallback to Groq if Gemini failed
     console.log(`[ai-client] Gemini attempt unsuccessful, attempting Groq fallback...`);
     const groqRes = await callGroq();
     if (groqRes) return groqRes;
   } else {
-    // Route 2: Standard fast path (Groq primary, Gemini fallback)
+    // Standard fast path (Groq primary, Gemini fallback only if healthy)
     const groqRes = await callGroq();
     if (groqRes) return groqRes;
 
-    console.log(`[ai-client] Groq attempt unsuccessful, attempting Gemini fallback...`);
-    const geminiRes = await callGemini();
-    if (geminiRes) return geminiRes;
+    if (isGeminiAvailable()) {
+      console.log(`[ai-client] Groq attempt unsuccessful, attempting Gemini fallback...`);
+      const geminiRes = await callGemini();
+      if (geminiRes) return geminiRes;
+    }
   }
 
   console.warn(`[ai-client] Both Groq and Gemini calls were exhausted with no valid response.`);
