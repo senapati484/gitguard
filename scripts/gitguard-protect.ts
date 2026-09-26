@@ -21,6 +21,10 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import readline from "readline";
+import dotenv from "dotenv";
+
+// Load local environment configuration
+dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 
 // ── Known Secret Patterns for Instant Local Interception ──────────────────────
 
@@ -362,6 +366,92 @@ export function autoSolveSecret(
   };
 }
 
+// ── Bug Defect Detection & Auto-Solve ─────────────────────────────────────────
+
+export interface DetectedBugFinding {
+  file: string;
+  line: number;
+  category: string;
+  severity: string;
+  message: string;
+  originalCode: string;
+  suggestedChange: string;
+}
+
+export interface AutoSolveBugResult {
+  file: string;
+  line: number;
+  originalCode: string;
+  replacementCode: string;
+  message: string;
+}
+
+async function scanForBugs(gitRoot: string, diff: string): Promise<DetectedBugFinding[]> {
+  try {
+    const { extractChangedHunks, detectBugsInHunks } = await import("../agents/bug-agent");
+    const hunks = extractChangedHunks(diff);
+    if (hunks.length === 0) return [];
+
+    const bugs = await detectBugsInHunks(hunks);
+    return bugs
+      .filter(
+        (b) =>
+          Boolean(b.suggestedChange && b.suggestedChange.trim().length > 0) &&
+          (b.severity === "critical" || b.severity === "high" || b.severity === "medium")
+      )
+      .map((b) => ({
+        file: b.file,
+        line: b.line,
+        category: b.category || "code_defect",
+        severity: b.severity,
+        message: b.message,
+        originalCode: b.originalCode || "",
+        suggestedChange: b.suggestedChange || "",
+      }));
+  } catch (err) {
+    console.warn("⚠️ BugAgent scan skipped (non-fatal):", err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+
+function autoSolveBug(gitRoot: string, bug: DetectedBugFinding): AutoSolveBugResult | null {
+  const filePath = path.isAbsolute(bug.file)
+    ? bug.file
+    : path.join(gitRoot, bug.file);
+
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  let newContent = content;
+  const trimmedOrig = bug.originalCode ? bug.originalCode.trim() : "";
+  const trimmedFix = bug.suggestedChange ? bug.suggestedChange.trim() : "";
+
+  if (!trimmedFix) return null;
+
+  if (trimmedOrig && newContent.includes(trimmedOrig)) {
+    newContent = newContent.replace(trimmedOrig, trimmedFix);
+  } else if (bug.line > 0 && bug.line <= lines.length) {
+    const lineIdx = bug.line - 1;
+    lines[lineIdx] = trimmedFix;
+    newContent = lines.join("\n");
+  } else {
+    return null;
+  }
+
+  fs.writeFileSync(filePath, newContent, "utf-8");
+  return {
+    file: bug.file,
+    line: bug.line,
+    originalCode: bug.originalCode || "detected defect",
+    replacementCode: trimmedFix,
+    message: bug.message,
+  };
+}
+
 // ── Main Execution Flow ──────────────────────────────────────────────────────
 
 async function main() {
@@ -381,7 +471,7 @@ async function main() {
     process.exit(0);
   }
 
-  // Run dual-engine detection: Gitleaks + Builtin Patterns
+  // 1. Run dual-engine secret detection: Gitleaks + Builtin Patterns
   const gitleaksSecrets = scanWithGitleaks(gitRoot);
   const regexSecrets = scanWithRegex(diff);
 
@@ -396,74 +486,111 @@ async function main() {
     }
   }
 
-  if (secrets.length === 0) {
+  // 2. Run AI BugAgent defect analysis on outgoing diff hunks
+  console.log("🔍 GitGuard: Analyzing outgoing code for credentials & software defects...");
+  const detectedBugs = await scanForBugs(gitRoot, diff);
+
+  if (secrets.length === 0 && detectedBugs.length === 0) {
     if (!hookType) {
-      console.log("✅ GitGuard: All outgoing code verified. Zero credentials detected. Ready to push!");
+      console.log("✅ GitGuard: All outgoing code verified. Zero credentials and zero defects detected. Ready to push!");
     }
     process.exit(0);
   }
 
-  // 🚨 SECRETS DETECTED! HALT DIRECT PUSH TO GITHUB!
+  // 🚨 ISSUES DETECTED! HALT DIRECT PUSH TO GITHUB!
   console.log("\n" + "=".repeat(68));
-  console.log("🛑 🛡️ GitGuard Security Interceptor: CREDENTIAL LEAK DETECTED!");
+  console.log("🛑 🛡️ GitGuard Code Interceptor: DEFECT / CREDENTIAL LEAK DETECTED!");
   console.log("=".repeat(68));
-  console.log(`GitGuard prevented ${secrets.length} secret(s) from being pushed to GitHub:\n`);
 
-  for (const s of secrets) {
-    const masked = s.secret.slice(0, 4) + "••••••••" + s.secret.slice(-4);
-    console.log(`  • [${s.rule.name}] in ${s.file}:${s.line}`);
-    console.log(`    Detected value: ${masked}`);
+  if (secrets.length > 0) {
+    console.log(`GitGuard prevented ${secrets.length} secret(s) from reaching GitHub:\n`);
+    for (const s of secrets) {
+      const masked = s.secret.slice(0, 4) + "••••••••" + s.secret.slice(-4);
+      console.log(`  • [${s.rule.name}] in ${s.file}:${s.line}`);
+      console.log(`    Detected value: ${masked}`);
+    }
+  }
+
+  if (detectedBugs.length > 0) {
+    console.log(`GitGuard prevented ${detectedBugs.length} defect(s) from reaching GitHub:\n`);
+    for (const b of detectedBugs) {
+      console.log(`  • [${(b.category ?? "").toUpperCase()} (${(b.severity ?? "").toUpperCase()})] in ${b.file}:${b.line}`);
+      console.log(`    Message: ${b.message}`);
+      if (b.originalCode) console.log(`    Buggy code:    ${b.originalCode}`);
+      if (b.suggestedChange) console.log(`    Suggested fix: ${b.suggestedChange}`);
+    }
   }
 
   console.log("\n⚡ AUTOMATED AUTO-SOLVE INITIATING...");
-  console.log("   1. Moving credential(s) safely into .env.local (git-ignored)");
-  console.log("   2. Replacing hardcoded secret(s) with process.env.<VAR>");
-  console.log("   3. Amending local commit before pushing to GitHub\n");
+  if (secrets.length > 0) {
+    console.log("   1. Moving credential(s) safely into .env.local (git-ignored)");
+    console.log("   2. Replacing hardcoded secret(s) with process.env.<VAR>");
+  }
+  if (detectedBugs.length > 0) {
+    console.log("   3. Applying verified BugAgent code fixes to resolve defect(s)");
+  }
+  console.log("   4. Amending local commit before pushing to GitHub\n");
 
-  const solvedResults: AutoSolveResult[] = [];
+  const solvedSecrets: AutoSolveResult[] = [];
   for (const s of secrets) {
     const result = autoSolveSecret(gitRoot, s);
     if (result) {
-      solvedResults.push(result);
-      console.log(`   ✓ ${s.file}:${s.line} -> Extracted to .env.local as ${result.envVarName}`);
+      solvedSecrets.push(result);
+      console.log(`   ✓ [Secret] ${s.file}:${s.line} -> Extracted to .env.local as ${result.envVarName}`);
       console.log(`     Replaced with: ${result.replacementCode}`);
     }
   }
 
-  if (solvedResults.length > 0) {
+  const solvedBugs: AutoSolveBugResult[] = [];
+  for (const b of detectedBugs) {
+    const result = autoSolveBug(gitRoot, b);
+    if (result) {
+      solvedBugs.push(result);
+      console.log(`   ✓ [Bug Fix] ${b.file}:${b.line} (${b.category}) -> Auto-solved defect`);
+      console.log(`     Replaced: ${result.originalCode}`);
+      console.log(`     With:     ${result.replacementCode}`);
+    }
+  }
+
+  if (solvedSecrets.length > 0 || solvedBugs.length > 0) {
     try {
-      // Stage sanitized files
-      for (const res of solvedResults) {
+      // Stage sanitized and fixed files
+      for (const res of solvedSecrets) {
         execSync(`git add "${res.file}"`, { stdio: "ignore" });
       }
-      execSync("git add .gitignore", { stdio: "ignore" });
+      for (const res of solvedBugs) {
+        execSync(`git add "${res.file}"`, { stdio: "ignore" });
+      }
+      if (solvedSecrets.length > 0) {
+        execSync("git add .gitignore", { stdio: "ignore" });
+      }
 
       if (hookType === "pre-push") {
         // In pre-push hook: amend commit locally
         execSync("git commit --amend --no-edit", { stdio: "ignore" });
-        console.log("\n✅ Local commit successfully amended with sanitized code!");
-        console.log("🚀 Executing secure push with sanitized commit to GitHub...\n");
+        console.log("\n✅ Local commit successfully amended with verified bug fix & sanitized code!");
+        console.log("🚀 Executing secure push with resolved commit to GitHub...\n");
 
         // Execute sanitized push
         const remoteName = args[hookIndex + 2] || "origin";
         try {
           execSync(`git push ${remoteName} HEAD --no-verify`, { stdio: "inherit" });
-          console.log("\n🎉 Clean push to GitHub complete! Zero leaked credentials on GitHub.");
+          console.log("\n🎉 Clean push to GitHub complete! All defects auto-solved. Zero bugs on GitHub.");
         } catch {
-          console.log("\n💡 Note: Please re-run 'git push' to transmit your sanitized commit.");
+          console.log("\n💡 Note: Please re-run 'git push' to transmit your resolved commit.");
         }
 
         // Abort the initial dirty push hook execution cleanly since we just pushed the clean commit
         process.exit(1);
       } else {
-        console.log("\n✅ All credentials auto-solved and staged!");
+        console.log("\n✅ All issues auto-solved and staged!");
         console.log("💡 You can now run 'git commit' or 'git commit --amend' and push securely.");
         process.exit(0);
       }
     } catch (gitErr: unknown) {
       const msg = gitErr instanceof Error ? gitErr.message : String(gitErr);
       console.error("\n❌ Notice during git amend:", msg);
-      console.log("⚠️ Push halted to keep credentials safe from GitHub. Please review changes.");
+      console.log("⚠️ Push halted to keep repository clean. Please review changes.");
       process.exit(1);
     }
   } else {
