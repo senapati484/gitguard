@@ -259,10 +259,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               updateFields.repoName = repositories?.[0]?.name;
             }
 
-            if (preDoc && preDoc.exists && preDoc.data()?.marketplace) {
-              updateFields.marketplace = preDoc.data()!.marketplace;
-              updateFields.plan = preDoc.data()!.plan || "free";
-              updateFields.billingProvider = "marketplace";
+            if (preDoc && preDoc.exists) {
+              const data = preDoc.data();
+              if (data?.marketplace) {
+                updateFields.marketplace = data.marketplace;
+                updateFields.plan = data.plan || "free";
+                updateFields.billingProvider = "marketplace";
+              }
             }
 
             await installRef.set(updateFields, { merge: true });
@@ -288,15 +291,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const reposAdded = (payload as { repositories_added?: Array<{ id: number; name: string; full_name: string }> })
           .repositories_added;
 
-        if (instObj?.id && reposAdded && reposAdded.length > 0) {
+        if (instObj?.id && reposAdded && reposAdded.length > 0 && reposAdded[0]?.full_name) {
           try {
-            const { adminDb } = await import("@/lib/firebase-admin");
-            await adminDb
-              .collection("installations")
-              .doc(String(instObj.id))
-              .set(
-                {
-                  if (!reposAdded || reposAdded.length === 0) break;
             const { adminDb } = await import("@/lib/firebase-admin");
             await adminDb
               .collection("installations")
