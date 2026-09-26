@@ -432,12 +432,20 @@ function autoSolveBug(gitRoot: string, bug: DetectedBugFinding): AutoSolveBugRes
 
   if (!trimmedFix) return null;
 
-  if (trimmedOrig && newContent.includes(trimmedOrig)) {
-    newContent = newContent.replace(trimmedOrig, trimmedFix);
-  } else if (bug.line > 0 && bug.line <= lines.length) {
+  if (bug.line > 0 && bug.line <= lines.length) {
     const lineIdx = bug.line - 1;
-    lines[lineIdx] = trimmedFix;
+    let currentLine = lines[lineIdx];
+
+    if (trimmedOrig && currentLine.includes(trimmedOrig)) {
+      lines[lineIdx] = currentLine.replace(trimmedOrig, trimmedFix);
+    } else if (trimmedFix) {
+      lines[lineIdx] = trimmedFix;
+    } else {
+      return null;
+    }
     newContent = lines.join("\n");
+  } else if (trimmedOrig && newContent.includes(trimmedOrig)) {
+    newContent = newContent.replace(trimmedOrig, trimmedFix);
   } else {
     return null;
   }
