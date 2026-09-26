@@ -44,16 +44,32 @@ const DEFAULT_JOB_OPTIONS: JobsOptions = {
   removeOnFail: { age: 60 * 60 * 24 * 7 }, // 7 days
 };
 
-let _queue: Queue<GitHubEventJobData> | null = null;
+const globalForQueue = globalThis as unknown as {
+  __gitguard_events_queue?: Queue<GitHubEventJobData>;
+};
 
 export function getGithubEventsQueue(): Queue<GitHubEventJobData> {
-  if (!_queue) {
-    _queue = new Queue<GitHubEventJobData>(GITHUB_EVENTS_QUEUE, {
+  if (!globalForQueue.__gitguard_events_queue) {
+    const queue = new Queue<GitHubEventJobData>(GITHUB_EVENTS_QUEUE, {
       connection: getRedisConnection(),
       defaultJobOptions: DEFAULT_JOB_OPTIONS,
     });
+
+    queue.on("error", (err: Error) => {
+      const msg = err?.message || String(err);
+      if (
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("Stream isn't writeable")
+      ) {
+        return; // Ignore idle serverless disconnects
+      }
+      console.warn("[queue] BullMQ Queue notice:", msg);
+    });
+
+    globalForQueue.__gitguard_events_queue = queue;
   }
-  return _queue;
+  return globalForQueue.__gitguard_events_queue;
 }
 
 /**

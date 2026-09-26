@@ -13,6 +13,35 @@
  */
 import IORedis from "ioredis";
 
+function attachErrorHandler(client: IORedis): IORedis {
+  client.on("error", (err: Error & { code?: string; errno?: number }) => {
+    const msg = err?.message || String(err);
+    const code = err?.code || "";
+    if (
+      code === "ECONNRESET" ||
+      code === "ETIMEDOUT" ||
+      err?.errno === -54 ||
+      err?.errno === -60 ||
+      msg.includes("ECONNRESET") ||
+      msg.includes("ETIMEDOUT") ||
+      msg.includes("Stream isn't writeable")
+    ) {
+      // Expected when Upstash closes idle serverless sockets; ioredis reconnects on demand
+      return;
+    }
+    console.warn("[redis] Connection notice:", msg);
+  });
+
+  // Ensure any duplicate connection spawned by BullMQ also inherits this error handler
+  const origDuplicate = client.duplicate.bind(client);
+  client.duplicate = function (...args: unknown[]) {
+    const dup = (origDuplicate as (...params: unknown[]) => IORedis)(...args);
+    return attachErrorHandler(dup);
+  };
+
+  return client;
+}
+
 function buildConnection(): IORedis {
   let url = process.env.UPSTASH_REDIS_URL;
   if (!url) {
@@ -49,33 +78,48 @@ function buildConnection(): IORedis {
     },
   });
 
-  // Handle idle connection drops from Upstash serverless gracefully
-  client.on("error", (err: Error & { code?: string }) => {
-    const msg = err?.message || String(err);
-    const code = err?.code || "";
+  return attachErrorHandler(client);
+}
+
+// Global process-level handler to prevent idle Upstash serverless socket drops
+// from logging unhandled stream read ETIMEDOUT / ECONNRESET in Next.js dev server.
+const globalState = globalThis as unknown as {
+  __gitguard_redis_error_hooked?: boolean;
+};
+
+if (typeof process !== "undefined" && !globalState.__gitguard_redis_error_hooked) {
+  globalState.__gitguard_redis_error_hooked = true;
+  process.on("uncaughtException", (err: unknown) => {
+    const errObj = (typeof err === "object" && err !== null ? err : {}) as {
+      code?: string;
+      errno?: number;
+      message?: string;
+    };
+    const code = errObj.code;
+    const errno = errObj.errno;
+    const msg = err instanceof Error ? err.message : errObj.message || "";
     if (
       code === "ECONNRESET" ||
       code === "ETIMEDOUT" ||
-      msg.includes("ECONNRESET") ||
+      errno === -54 ||
+      errno === -60 ||
       msg.includes("ETIMEDOUT") ||
-      msg.includes("Stream isn't writeable")
+      msg.includes("ECONNRESET")
     ) {
-      // Expected on idle cloud Redis drops; ioredis reconnects automatically via retryStrategy
-      return;
+      return; // Ignore idle socket termination from serverless Redis
     }
-    console.warn("[redis] Connection notice:", msg);
+    console.error("Uncaught exception:", err);
   });
-
-  return client;
 }
 
-// Module-level singleton so a single connection is reused across hot-reloads
-// in dev and across handler invocations in the same worker process.
-let _connection: IORedis | null = null;
+// Preserve connection across Next.js HMR reloads so orphan sockets don't linger
+const globalForRedis = globalThis as unknown as {
+  __gitguard_redis_conn?: IORedis;
+};
 
 export function getRedisConnection(): IORedis {
-  if (!_connection) {
-    _connection = buildConnection();
+  if (!globalForRedis.__gitguard_redis_conn) {
+    globalForRedis.__gitguard_redis_conn = buildConnection();
   }
-  return _connection;
+  return globalForRedis.__gitguard_redis_conn;
 }

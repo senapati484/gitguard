@@ -295,16 +295,19 @@ export async function getIgnoredAuditRecords(
       query = query.where("repo", "==", repo.trim().toLowerCase());
     }
 
-    const snapshot = await query.orderBy("timestamp", "desc").limit(limitCount).get().catch((err) => {
-      // Fallback without composite index
-      console.warn(`[gitguard-ignore] Timestamp index notice, fetching without sort:`, err.message);
+    const snapshot = await query.orderBy("timestamp", "desc").limit(limitCount).get().catch(() => {
+      // Fallback without composite index: fetch and sort in memory
       return query.limit(limitCount).get();
     });
 
-    return snapshot.docs.map((doc) => ({
+    const records = snapshot.docs.map((doc) => ({
       id: doc.id,
       ...(doc.data() as Omit<IgnoredAuditRecord, "id">),
     }));
+
+    return records.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
   } catch (err) {
     console.warn(`[gitguard-ignore] Failed to fetch ignored audit records:`, err);
     return [];
