@@ -77,10 +77,11 @@ export function getGithubEventsQueue(): Queue<GitHubEventJobData> {
  */
 export async function enqueueGitHubEvent(data: GitHubEventJobData): Promise<void> {
   const queue = getGithubEventsQueue();
+  const safeRepo = data.repo.replace(/[/:]/g, "-");
   const jobId =
     data.event === "push"
-      ? `push:${data.repo}:${data.sha}`
-      : `pr:${data.repo}:${data.pullNumber}:${data.sha}`;
+      ? `push-${safeRepo}-${data.sha}`
+      : `pr-${safeRepo}-${data.pullNumber}-${data.sha}`;
 
   await queue.add(data.event, data, { jobId });
   console.log(

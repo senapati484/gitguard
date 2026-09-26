@@ -227,7 +227,17 @@ export async function autoSolveAndCommitToGitHub(options: {
 
       // Strategy A: Try GitHub App Octokit PUT /contents directly on target branch
       try {
-        const putParams: Record<string, unknown> = {
+        const putParams: {
+          owner: string;
+          repo: string;
+          path: string;
+          branch: string;
+          message: string;
+          content: string;
+          sha?: string;
+          committer: { name: string; email: string };
+          author: { name: string; email: string };
+        } = {
           owner,
           repo,
           path: filePath,
@@ -249,7 +259,7 @@ export async function autoSolveAndCommitToGitHub(options: {
 
         const putRes = await octokit.request(
           "PUT /repos/{owner}/{repo}/contents/{path}",
-          putParams as Parameters<Octokit["request"]>[1]
+          putParams
         );
         const putData = putRes.data as { commit?: { sha?: string } };
         committedSha = putData.commit?.sha;

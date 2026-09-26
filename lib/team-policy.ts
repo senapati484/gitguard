@@ -26,48 +26,59 @@ export async function getInstallationPolicy(
   const installIdStr = String(installationId);
   const installIdNum = Number(installationId);
 
-  try {
-    const installRef = adminDb.collection("installations");
-    let docSnap = await installRef.doc(installIdStr).get();
+  const fetchPolicy = async (): Promise<OrgPolicy> => {
+    try {
+      const installRef = adminDb.collection("installations");
+      let docSnap = await installRef.doc(installIdStr).get();
 
-    if (!docSnap.exists) {
-      const q = await installRef
-        .where("installationId", "in", [
-          installIdStr,
-          !isNaN(installIdNum) ? installIdNum : installIdStr,
-        ])
-        .limit(1)
-        .get();
+      if (!docSnap.exists) {
+        const q = await installRef
+          .where("installationId", "in", [
+            installIdStr,
+            !isNaN(installIdNum) ? installIdNum : installIdStr,
+          ])
+          .limit(1)
+          .get();
 
-      if (!q.empty) {
-        docSnap = q.docs[0];
+        if (!q.empty) {
+          docSnap = q.docs[0];
+        }
       }
-    }
 
-    if (docSnap.exists) {
-      const data = docSnap.data();
-      if (data?.policy && typeof data.policy === "object") {
-        return {
-          ...DEFAULT_ORG_POLICY,
-          ...data.policy,
-          severityThresholds: {
-            ...DEFAULT_ORG_POLICY.severityThresholds,
-            ...(data.policy.severityThresholds || {}),
-          },
-          requiredAgents: Array.isArray(data.policy.requiredAgents)
-            ? data.policy.requiredAgents
-            : DEFAULT_ORG_POLICY.requiredAgents,
-          customSecretPatterns: Array.isArray(data.policy.customSecretPatterns)
-            ? data.policy.customSecretPatterns
-            : DEFAULT_ORG_POLICY.customSecretPatterns,
-        };
+      if (docSnap.exists) {
+        const data = docSnap.data();
+        if (data?.policy && typeof data.policy === "object") {
+          return {
+            ...DEFAULT_ORG_POLICY,
+            ...data.policy,
+            severityThresholds: {
+              ...DEFAULT_ORG_POLICY.severityThresholds,
+              ...(data.policy.severityThresholds || {}),
+            },
+            requiredAgents: Array.isArray(data.policy.requiredAgents)
+              ? data.policy.requiredAgents
+              : DEFAULT_ORG_POLICY.requiredAgents,
+            customSecretPatterns: Array.isArray(data.policy.customSecretPatterns)
+              ? data.policy.customSecretPatterns
+              : DEFAULT_ORG_POLICY.customSecretPatterns,
+          };
+        }
       }
+    } catch (err) {
+      console.warn(
+        `[team-policy] Notice: Could not fetch policy for installation ${installationId} (using defaults):`,
+        (err as Error)?.message || err
+      );
     }
-  } catch (err) {
-    console.warn(`[team-policy] Error fetching policy for installation ${installationId}:`, err);
-  }
+    return DEFAULT_ORG_POLICY;
+  };
 
-  return DEFAULT_ORG_POLICY;
+  // Guard against gRPC connection hangs during webhook processing (2.5s cap)
+  const timeoutPromise = new Promise<OrgPolicy>((resolve) =>
+    setTimeout(() => resolve(DEFAULT_ORG_POLICY), 2500)
+  );
+
+  return Promise.race([fetchPolicy(), timeoutPromise]);
 }
 
 /**

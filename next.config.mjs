@@ -1,8 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Tell Next.js not to bundle these Node.js packages through webpack —
-  // they contain native bindings or are only used server-side in the worker.
-  serverExternalPackages: ["bullmq", "ioredis"],
+  // In Next.js 14 App Router, external packages belong under experimental.serverComponentsExternalPackages
+  experimental: {
+    serverComponentsExternalPackages: ["bullmq", "ioredis"],
+  },
 };
 
 export default nextConfig;
