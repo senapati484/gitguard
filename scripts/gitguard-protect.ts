@@ -22,6 +22,7 @@ import fs from "fs";
 import path from "path";
 import readline from "readline";
 import dotenv from "dotenv";
+import { applyPatchToContent } from "../lib/auto-solve-git";
 
 // Load local environment configuration
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
@@ -424,38 +425,22 @@ function autoSolveBug(gitRoot: string, bug: DetectedBugFinding): AutoSolveBugRes
   }
 
   const content = fs.readFileSync(filePath, "utf-8");
-  const lines = content.split("\n");
+  const patched = applyPatchToContent(content, {
+    line: bug.line,
+    originalCode: bug.originalCode,
+    suggestedChange: bug.suggestedChange,
+  });
 
-  let newContent = content;
-  const trimmedOrig = bug.originalCode ? bug.originalCode.trim() : "";
-  const trimmedFix = bug.suggestedChange ? bug.suggestedChange.trim() : "";
-
-  if (!trimmedFix) return null;
-
-  if (bug.line > 0 && bug.line <= lines.length) {
-    const lineIdx = bug.line - 1;
-    let currentLine = lines[lineIdx];
-
-    if (trimmedOrig && currentLine.includes(trimmedOrig)) {
-      lines[lineIdx] = currentLine.replace(trimmedOrig, trimmedFix);
-    } else if (trimmedFix) {
-      lines[lineIdx] = trimmedFix;
-    } else {
-      return null;
-    }
-    newContent = lines.join("\n");
-  } else if (trimmedOrig && newContent.includes(trimmedOrig)) {
-    newContent = newContent.replace(trimmedOrig, trimmedFix);
-  } else {
+  if (!patched || patched === content) {
     return null;
   }
 
-  fs.writeFileSync(filePath, newContent, "utf-8");
+  fs.writeFileSync(filePath, patched, "utf-8");
   return {
     file: bug.file,
     line: bug.line,
     originalCode: bug.originalCode || "detected defect",
-    replacementCode: trimmedFix,
+    replacementCode: bug.suggestedChange.trim(),
     message: bug.message,
   };
 }

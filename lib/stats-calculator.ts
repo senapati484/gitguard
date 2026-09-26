@@ -23,7 +23,6 @@ export function formatUserHeadline(record: UserActivityRecord): string {
   const emailDomain = parts[1] || "Unknown Domain";
   return `User from ${emailDomain}`;
 }
-if (!record.email || !record.email.includes("@")) {
 export function getUserDomain(record: UserActivityRecord): string {
   const email = record.user?.profile?.email;
   if (!email || !email.includes("@")) {

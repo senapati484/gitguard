@@ -40,14 +40,24 @@ export function applyPatchToContent(
   fix: { originalCode?: string; suggestedChange: string; line: number }
 ): string | null {
   const lines = content.split("\n");
-  const trimmedOrig = fix.originalCode ? fix.originalCode.trim() : "";
-  const trimmedFix = fix.suggestedChange ? fix.suggestedChange.trim() : "";
+  let rawFix = fix.suggestedChange || "";
+  let rawOrig = fix.originalCode || "";
+
+  // Strip accidental markdown backtick fences from AI suggestions
+  rawFix = rawFix.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/i, "").trim();
+  rawOrig = rawOrig.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/i, "").trim();
+
+  const trimmedOrig = rawOrig.trim();
+  const trimmedFix = rawFix.trim();
 
   if (!trimmedFix) return null;
 
   // Strategy 1: Exact raw string replacement
-  if (fix.originalCode && content.includes(fix.originalCode)) {
-    return content.replace(fix.originalCode, fix.suggestedChange);
+  if (trimmedOrig && content.includes(trimmedOrig)) {
+    // If unique occurrence in file, replace cleanly
+    if (content.indexOf(trimmedOrig) === content.lastIndexOf(trimmedOrig)) {
+      return content.replace(trimmedOrig, trimmedFix);
+    }
   }
 
   // Strategy 2: Targeted line replacement (1-indexed)
@@ -61,9 +71,9 @@ export function applyPatchToContent(
       return lines.join("\n");
     }
 
-    // Check neighboring lines (+/- 3 lines) in case line number was slightly shifted by diff
+    // Check neighboring lines (+/- 4 lines) in case line number was shifted by diff context
     let patchedNeighbor = false;
-    for (let offset = -3; offset <= 3; offset++) {
+    for (let offset = -4; offset <= 4; offset++) {
       if (offset === 0) continue;
       const neighborIdx = lineIdx + offset;
       if (neighborIdx >= 0 && neighborIdx < lines.length) {
@@ -84,19 +94,28 @@ export function applyPatchToContent(
       return lines.join("\n");
     }
 
-    // Fallback: replace target line if no originalCode was provided
-    if (!trimmedOrig && trimmedFix) {
+    // Fallback: only replace target line if non-empty and no orig specified
+    if (!trimmedOrig && trimmedFix && currentLine.trim().length > 0) {
       lines[lineIdx] = indent + trimmedFix;
       return lines.join("\n");
     }
   }
 
-  // Strategy 3: File-wide unique match on trimmed original
+  // Strategy 3: File-wide first match on trimmed original if still present
   if (trimmedOrig && content.includes(trimmedOrig)) {
     return content.replace(trimmedOrig, trimmedFix);
   }
 
   return null;
+}
+
+/**
+ * Checks whether opening and closing curly braces are balanced.
+ */
+function hasBalancedBraces(code: string): boolean {
+  const openCount = (code.match(/{/g) || []).length;
+  const closeCount = (code.match(/}/g) || []).length;
+  return openCount === closeCount;
 }
 
 /**
@@ -168,12 +187,29 @@ export async function autoSolveAndCommitToGitHub(options: {
 
       let patchedContent = originalContent;
 
+      // Deduplicate fixes targeting the exact same line or duplicate suggestedChange
+      const seenFixLines = new Set<number>();
+      const dedupedFixes: AutoSolveFixItem[] = [];
+      for (const f of fileFixes) {
+        if (!seenFixLines.has(f.line)) {
+          seenFixLines.add(f.line);
+          dedupedFixes.push(f);
+        }
+      }
+
       // Sort fixes descending by line so multiple edits don't shift line numbers
-      const sortedFixes = [...fileFixes].sort((a, b) => b.line - a.line);
+      const sortedFixes = [...dedupedFixes].sort((a, b) => b.line - a.line);
 
       for (const fix of sortedFixes) {
         const nextContent = applyPatchToContent(patchedContent, fix);
         if (nextContent) {
+          const isCodeFile = /\.[jt]sx?$/.test(filePath);
+          if (isCodeFile && hasBalancedBraces(patchedContent) && !hasBalancedBraces(nextContent)) {
+            console.warn(
+              `[auto-solve-git] Patch on ${filePath}:${fix.line} resulted in unbalanced syntax; skipping bad patch.`
+            );
+            continue;
+          }
           patchedContent = nextContent;
         }
       }
