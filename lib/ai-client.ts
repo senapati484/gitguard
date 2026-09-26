@@ -233,12 +233,44 @@ export async function generateAICompletion(
                 );
                 break; // Break inner retry loop to try next candidate model
               }
+            } else if (res.status === 400 && errorText?.includes("json_validate_failed")) {
+              console.log(`[ai-client] 🔄 Groq json_validate_failed on ${currentModel} — retrying prompt in relaxed JSON mode...`);
+              try {
+                const retryRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${groqApiKey}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    model: currentModel,
+                    messages,
+                    temperature,
+                  }),
+                });
+                if (retryRes.ok) {
+                  const retryData = await retryRes.json();
+                  const content = retryData.choices?.[0]?.message?.content;
+                  if (content) {
+                    console.log(`[ai-client] Groq ${currentModel} relaxed response received successfully`);
+                    return content;
+                  }
+                }
+              } catch {
+                // fall through to next candidate model
+              }
+              break;
             } else {
               break;
             }
           }
-        } catch (err) {
-          console.warn(`[ai-client] Groq API request failed on ${currentModel}:`, err);
+        } catch (err: any) {
+          console.warn(`[ai-client] Groq API request failed on ${currentModel}:`, err?.message || err);
+          if (retryCount < maxRetries) {
+            await new Promise((r) => setTimeout(r, 600));
+            retryCount++;
+            continue;
+          }
           break;
         }
       }
