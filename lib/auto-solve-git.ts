@@ -279,8 +279,12 @@ export async function autoSolveAndCommitToGitHub(options: {
           try {
             origBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
             if (origBranch !== cleanBranch) {
-              // Ensure we are working on the clean target branch, not accidentally on main
-              execSync(`git checkout -B "${cleanBranch}"`, { stdio: "ignore" });
+              // Switch to the target branch safely without force-resetting its commit history
+              try {
+                execSync(`git checkout "${cleanBranch}"`, { stdio: "ignore" });
+              } catch {
+                execSync(`git checkout -b "${cleanBranch}" "origin/${cleanBranch}"`, { stdio: "ignore" });
+              }
               switched = true;
             }
 
