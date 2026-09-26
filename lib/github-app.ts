@@ -18,7 +18,7 @@
  */
 import { App } from "@octokit/app";
 import type { Octokit } from "@octokit/core";
-import { Agent, setGlobalDispatcher } from "undici";
+import { Agent, setGlobalDispatcher, fetch as undiciFetch } from "undici";
 
 // ---------------------------------------------------------------------------
 // Configure global fetch dispatcher with extended connection timeout (45s)
@@ -35,6 +35,13 @@ try {
     keepAliveMaxTimeout: 60_000,
   });
   setGlobalDispatcher(globalAgent);
+  // Ensure globalThis.fetch uses custom agent with 45s timeout across the app
+  globalThis.fetch = ((input: any, init?: any) => {
+    return undiciFetch(input, {
+      ...init,
+      dispatcher: globalAgent,
+    });
+  }) as any;
 } catch (e) {
   console.warn("[github-app] Could not set undici global dispatcher:", e);
 }

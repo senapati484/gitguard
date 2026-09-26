@@ -1,7 +1,21 @@
-# GitGuard 🛡️
+<p align="center">
+  <img src="public/gitguard-logo.jpeg" alt="GitGuard Logo" width="160" style="border-radius: 20px;" />
+</p>
 
-> **Next-Generation Autonomous GitHub Security & Code Correctness Gatekeeper.**  
-> Powered by LangGraph Multi-Agent Orchestration, Semgrep OWASP SAST, Gitleaks, Deep Exploitability AI Reasoning, Firebase, and BullMQ.
+<h1 align="center">GitGuard 🛡️</h1>
+
+<p align="center">
+  <strong>Next-Generation Autonomous GitHub Security & Code Correctness Gatekeeper.</strong><br>
+  <em>Powered by LangGraph Multi-Agent Orchestration, Semgrep OWASP SAST, Gitleaks, Deep Exploitability AI Reasoning, Firebase, and BullMQ.</em>
+</p>
+
+<p align="center">
+  <a href="#-architecture-overview">Architecture</a> •
+  <a href="#-core-agents">Agents</a> •
+  <a href="#-autonomous-auto-solve-engine">Auto-Solve</a> •
+  <a href="#-live-dashboard--analytics">Dashboard</a> •
+  <a href="#-getting-started">Getting Started</a>
+</p>
 
 GitGuard installs as a native GitHub App on your repositories, listens to pull requests and push webhooks, and orchestrates an autonomous ensemble of specialized security and correctness agents in parallel before synthesizing an authoritative **PASS / WARN / BLOCK** verdict.
 

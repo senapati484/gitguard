@@ -51,6 +51,7 @@ import {
 } from "@/lib/gitguard-ignore";
 import { PipelineProfiler } from "@/lib/profiler";
 import type { OrgPolicy } from "@/lib/team-policy-types";
+import { octokitRequestWithRetry } from "@/lib/github-app";
 
 // ── 1. LangGraph State Annotation ─────────────────────────────────────────────
 
@@ -849,18 +850,20 @@ Structure:
   try {
     const conclusion = decision === "BLOCK" ? "failure" : decision === "WARN" ? "neutral" : "success";
 
-    await state.octokit.request("POST /repos/{owner}/{repo}/check-runs", {
-      owner: state.owner,
-      repo: state.repo,
-      name: "GitGuard / Orchestrator",
-      head_sha: state.sha,
-      status: "completed",
-      conclusion,
-      output: {
-        title: `GitGuard Verdict: ${decision}`,
-        summary: finalComment.slice(0, 60000), // GitHub summary size guard
-      },
-    });
+    await octokitRequestWithRetry(() =>
+      state.octokit.request("POST /repos/{owner}/{repo}/check-runs", {
+        owner: state.owner,
+        repo: state.repo,
+        name: "GitGuard / Orchestrator",
+        head_sha: state.sha,
+        status: "completed",
+        conclusion,
+        output: {
+          title: `GitGuard Verdict: ${decision}`,
+          summary: finalComment.slice(0, 60000), // GitHub summary size guard
+        },
+      })
+    );
 
     console.log(`[graph:orchestrator_node] Published Check Run "GitGuard / Orchestrator" (${conclusion})`);
   } catch (err) {
@@ -868,18 +871,21 @@ Structure:
   }
 
   // 4. Post PR Comment if PR number is available
-  if (state.pullNumber && state.pullNumber > 0) {
+  const prNum = state.pullNumber;
+  if (prNum && prNum > 0) {
     try {
-      await state.octokit.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-        {
-          owner: state.owner,
-          repo: state.repo,
-          issue_number: state.pullNumber,
-          body: finalComment,
-        }
+      await octokitRequestWithRetry(() =>
+        state.octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner: state.owner,
+            repo: state.repo,
+            issue_number: prNum,
+            body: finalComment,
+          }
+        )
       );
-      console.log(`[graph:orchestrator_node] Posted synthesized comment to PR #${state.pullNumber}`);
+      console.log(`[graph:orchestrator_node] Posted synthesized comment to PR #${prNum}`);
     } catch (err) {
       console.error(`[graph:orchestrator_node] Failed to post PR comment:`, err);
     }

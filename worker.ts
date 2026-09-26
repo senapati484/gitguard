@@ -28,6 +28,28 @@ try {
   // safe fallback
 }
 
+import { Agent, setGlobalDispatcher, fetch as undiciFetch } from "undici";
+try {
+  const globalAgent = new Agent({
+    connect: { timeout: 45_000 },
+    headersTimeout: 45_000,
+    bodyTimeout: 45_000,
+    keepAliveTimeout: 30_000,
+    keepAliveMaxTimeout: 60_000,
+  });
+  setGlobalDispatcher(globalAgent);
+  // In Node 18+, globalThis.fetch uses internal undici with hardcoded 10s connectTimeout.
+  // Overriding globalThis.fetch forces Octokit and all HTTP clients in this worker process to use the 45s timeout.
+  globalThis.fetch = ((input: any, init?: any) => {
+    return undiciFetch(input, {
+      ...init,
+      dispatcher: globalAgent,
+    });
+  }) as any;
+} catch (e) {
+  console.warn("[worker] Could not configure undici global dispatcher:", e);
+}
+
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection } from "@/lib/redis";
 import {

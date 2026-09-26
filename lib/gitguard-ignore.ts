@@ -189,7 +189,7 @@ export async function fetchGitGuardIgnore(
       path: ".gitguardignore",
       ref,
       request: {
-        signal: AbortSignal.timeout(2500),
+        signal: AbortSignal.timeout(8000),
       },
     });
 
