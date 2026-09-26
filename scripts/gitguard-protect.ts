@@ -20,7 +20,6 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import readline from "readline";
 import dotenv from "dotenv";
 import { applyPatchToContent } from "../lib/auto-solve-git";
 
@@ -187,16 +186,20 @@ function scanWithGitleaks(gitRoot: string): DetectedSecret[] {
       const data = JSON.parse(fs.readFileSync(tempReport, "utf-8"));
       if (Array.isArray(data)) {
         for (const item of data) {
+          const secretVal: string = (item.Secret || item.Match || "").trim();
+          // Skip entries with no usable secret string to avoid matching everything
+          if (!secretVal || secretVal.length < 4) continue;
+
           const rule: SecretRule = {
             id: item.RuleID || "gitleaks-secret",
             name: item.Description || item.RuleID || "Exposed Secret",
             envPrefix: (item.RuleID || "SECRET_KEY").toUpperCase().replace(/[^A-Z0-9_]/g, "_"),
-            pattern: new RegExp(escapeRegex(item.Secret || item.Match)),
+            pattern: new RegExp(escapeRegex(secretVal)),
           };
           detected.push({
             file: item.File,
             line: item.StartLine || 1,
-            secret: item.Secret || item.Match,
+            secret: secretVal,
             rule,
             lineContent: item.Match || "",
           });
@@ -451,7 +454,8 @@ async function main() {
   const args = process.argv.slice(2);
   const hookIndex = args.indexOf("--hook");
   const hookType = hookIndex !== -1 ? args[hookIndex + 1] : undefined;
-  const isSolveOnly = args.includes("--solve");
+  // Remote name is passed as the 3rd arg after --hook: --hook pre-push <remote> <url>
+  const remoteName = (hookIndex !== -1 ? args[hookIndex + 2] : undefined) || "origin";
 
   const gitRoot = getGitRoot();
   process.chdir(gitRoot);
@@ -484,9 +488,7 @@ async function main() {
   const detectedBugs = await scanForBugs(gitRoot, diff);
 
   if (secrets.length === 0 && detectedBugs.length === 0) {
-    if (!hookType) {
-      console.log("✅ GitGuard: All outgoing code verified. Zero credentials and zero defects detected. Ready to push!");
-    }
+    console.log("✅ GitGuard: All outgoing code verified. Zero credentials and zero defects detected. Ready to push!");
     process.exit(0);
   }
 
@@ -547,14 +549,17 @@ async function main() {
 
   if (solvedSecrets.length > 0 || solvedBugs.length > 0) {
     try {
-      // Stage sanitized and fixed files
+      // Stage the sanitized source files (secrets replaced with process.env references)
       for (const res of solvedSecrets) {
         execSync(`git add "${res.file}"`, { stdio: "ignore" });
       }
+      // Stage auto-fixed source files (bugs patched in-place)
       for (const res of solvedBugs) {
         execSync(`git add "${res.file}"`, { stdio: "ignore" });
       }
       if (solvedSecrets.length > 0) {
+        // Stage .gitignore so the .env*.local ignore rule is committed alongside the fix.
+        // Note: .env.local itself is intentionally NOT staged — it is git-ignored and holds real secrets.
         execSync("git add .gitignore", { stdio: "ignore" });
       }
 
@@ -564,8 +569,7 @@ async function main() {
         console.log("\n✅ Local commit successfully amended with verified bug fix & sanitized code!");
         console.log("🚀 Executing secure push with resolved commit to GitHub...\n");
 
-        // Execute sanitized push
-        const remoteName = args[hookIndex + 2] || "origin";
+        // Execute sanitized push using the remote name parsed from hook args
         try {
           execSync(`git push ${remoteName} HEAD --no-verify`, { stdio: "inherit" });
           console.log("\n🎉 Clean push to GitHub complete! All defects auto-solved. Zero bugs on GitHub.");
